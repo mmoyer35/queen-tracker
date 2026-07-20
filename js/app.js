@@ -377,6 +377,10 @@
       $("#f-id").value = "";
       F("status").value = "alive";
       F("year").value = new Date().getFullYear();
+      const today = new Date().toISOString().slice(0, 10);
+      ["graft_date", "emergence_date", "mating_date", "status_date"].forEach((f) => {
+        if (F(f)) F(f).value = today;
+      });
       $("#form-delete").classList.add("hidden");
     }
     formModal.classList.remove("hidden");
