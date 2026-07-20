@@ -1,0 +1,9 @@
+# Nothing sensitive lives in this repo (data is in Supabase).
+# The anon key in js/config.js is safe to commit (protected by RLS),
+# but if you'd rather keep it out, uncomment the next line and host config.js separately.
+# js/config.js
+
+.DS_Store
+Thumbs.db
+node_modules/
+*.log
