@@ -15,5 +15,5 @@
 
 window.QUEEN_TRACKER_CONFIG = {
   SUPABASE_URL: "https://ahizurligbkuwxzlsqmn.supabase.co",
-  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFoaXp1cmxpZ2JrdXd4emxzcW1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1NjQxMzgsImV4cCI6Mj"
+  SUPABASE_ANON_KEY: "sb_publishable_jtBEhiZgaxcmcarW79_OZQ_lAVGMfw8",
 };
