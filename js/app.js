@@ -377,14 +377,26 @@
       $("#f-id").value = "";
       F("status").value = "alive";
       const today = new Date().toISOString().slice(0, 10);
-      ["graft_date", "emergence_date", "status_date"].forEach((f) => {
+      ["emergence_date", "status_date"].forEach((f) => {
         if (F(f)) F(f).value = today;
       });
       $("#form-delete").classList.add("hidden");
     }
+    toggleGraftDate();
     formModal.classList.remove("hidden");
     document.body.style.overflow = "hidden";
   }
+  // Graft date only makes sense when the queen was reared by grafting.
+  function toggleGraftDate() {
+    const show = F("source_method").value === "grafting";
+    $("#graft-date-field").classList.toggle("hidden", !show);
+    if (!show) {
+      F("graft_date").value = "";
+    } else if (!F("graft_date").value) {
+      F("graft_date").value = new Date().toISOString().slice(0, 10);
+    }
+  }
+  $("#f-source_method").addEventListener("change", toggleGraftDate);
   function closeForm() {
     formModal.classList.add("hidden");
     document.body.style.overflow = "";
@@ -393,9 +405,9 @@
   $("#form-close").addEventListener("click", closeForm);
   $("#form-cancel").addEventListener("click", closeForm);
 
-  // photo staging
-  $("#f-photos").addEventListener("change", (e) => {
-    for (const file of e.target.files) {
+  // photo staging (shared by the file picker and the camera capture)
+  function stageFiles(fileList) {
+    for (const file of fileList) {
       pendingPhotos.push(file);
       const url = URL.createObjectURL(file);
       const chip = document.createElement("div");
@@ -403,28 +415,77 @@
       chip.innerHTML = `<img src="${url}" class="w-16 h-16 object-cover rounded-lg border border-honey-200" />`;
       $("#photo-preview").appendChild(chip);
     }
-    e.target.value = "";
-  });
+  }
+  $("#f-photos").addEventListener("change", (e) => { stageFiles(e.target.files); e.target.value = ""; });
+  // dedicated camera capture (opens the camera directly on mobile)
+  $("#btn-take-photo").addEventListener("click", () => $("#f-camera").click());
+  $("#f-camera").addEventListener("change", (e) => { stageFiles(e.target.files); e.target.value = ""; });
 
   async function renderExistingPhotos(queenId) {
     const box = $("#photo-preview");
+    // clear any previously rendered saved photos (keeps freshly staged ones)
+    box.querySelectorAll(".existing-photo").forEach((el) => el.remove());
     const photos = await data.listPhotos(queenId);
     for (const p of photos) {
       const url = await data.photoUrl(p.storage_path);
       const chip = document.createElement("div");
-      chip.className = "relative group";
+      chip.className = "existing-photo relative group";
       chip.innerHTML = `
         <img src="${url}" class="w-16 h-16 object-cover rounded-lg border border-honey-200" />
-        <button type="button" title="Remove" class="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs">×</button>`;
-      chip.querySelector("button").addEventListener("click", async () => {
+        <button type="button" data-act="crop" title="Crop" class="absolute -top-2 -left-2 bg-honey-500 text-white rounded-full w-5 h-5 text-xs leading-none">✂</button>
+        <button type="button" data-act="del" title="Remove" class="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs leading-none">×</button>`;
+      chip.querySelector('[data-act="del"]').addEventListener("click", async () => {
         if (!confirm("Delete this photo?")) return;
         await data.deletePhoto(p);
         chip.remove();
         toast("Photo deleted");
       });
+      chip.querySelector('[data-act="crop"]').addEventListener("click", () => openCropper(p, queenId, url));
       box.appendChild(chip);
     }
   }
+
+  // ---- Photo cropping (Cropper.js) --------------------------------------
+  let cropper = null, cropPhoto = null, cropQueenId = null;
+  function closeCropper() {
+    if (cropper) { cropper.destroy(); cropper = null; }
+    cropPhoto = cropQueenId = null;
+    $("#crop-modal").classList.add("hidden");
+  }
+  function openCropper(photo, queenId, url) {
+    cropPhoto = photo; cropQueenId = queenId;
+    const img = $("#crop-img");
+    if (cropper) { cropper.destroy(); cropper = null; }
+    $("#crop-modal").classList.remove("hidden");
+    img.onload = () => {
+      cropper = new Cropper(img, { viewMode: 1, autoCropArea: 1, background: false, movable: false, zoomable: false, rotatable: false });
+    };
+    img.crossOrigin = "anonymous";
+    img.src = url;
+  }
+  $("#crop-cancel").addEventListener("click", closeCropper);
+  $("#crop-close").addEventListener("click", closeCropper);
+  $("#crop-apply").addEventListener("click", async () => {
+    if (!cropper) return;
+    const applyBtn = $("#crop-apply");
+    applyBtn.disabled = true; applyBtn.textContent = "Saving…";
+    try {
+      const canvas = cropper.getCroppedCanvas({ maxWidth: 2000, maxHeight: 2000 });
+      const blob = await new Promise((res, rej) =>
+        canvas.toBlob((b) => (b ? res(b) : rej(new Error("Could not process image"))), "image/jpeg", 0.92));
+      const file = new File([blob], `crop_${Date.now()}.jpg`, { type: "image/jpeg" });
+      const oldPhoto = cropPhoto, queenId = cropQueenId;
+      await data.uploadPhoto(queenId, file, oldPhoto.caption);
+      await data.deletePhoto(oldPhoto);
+      closeCropper();
+      await renderExistingPhotos(queenId);
+      toast("Photo cropped 🐝");
+    } catch (err) {
+      toast("Crop failed: " + err.message, 4000);
+    } finally {
+      applyBtn.disabled = false; applyBtn.textContent = "Crop & save";
+    }
+  });
 
   $("#queen-form").addEventListener("submit", async (e) => {
     e.preventDefault();
