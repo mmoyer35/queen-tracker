@@ -17,7 +17,7 @@
 
   // Local cache of queens for fast rendering / lineage / dropdowns
   let QUEENS = [];
-  let RATING_FIELDS = ["laying_pattern", "brood_quality", "temperament", "honey_production", "hygienic_behavior", "mite_resistance"];
+  let RATING_FIELDS = ["laying_pattern", "temperament", "honey_production", "hygienic_behavior", "mite_resistance"];
   let pendingPhotos = []; // File[] staged in the form
 
   // ---------- utilities ----------
@@ -519,7 +519,6 @@
           ${row("Current hive", esc(q.current_hive))}
           ${row("Mated status", esc(q.mated_status || ""))}
           ${rate("Laying pattern", q.laying_pattern)}
-          ${rate("Brood quality", q.brood_quality)}
           ${rate("Temperament", q.temperament)}
           ${rate("Honey production", q.honey_production)}
           <div class="text-honey-700 font-semibold text-xs uppercase mt-3 mb-1">Genetics</div>
