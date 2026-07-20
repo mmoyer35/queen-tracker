@@ -303,8 +303,8 @@
   const formModal = $("#form-modal");
   const F = (k) => $("#f-" + k);
   const CORE_FIELDS = [
-    "queen_code","name","source_method","graft_date","emergence_date","year","season","drone_source",
-    "current_hive","mated_status","mating_date","productivity_notes",
+    "queen_code","name","source_method","graft_date","emergence_date","season","drone_source",
+    "current_hive","mated_status","productivity_notes",
     "race_line","marking_color","notable_traits",
     "status","status_date","notes",
   ];
@@ -376,9 +376,8 @@
       $("#form-title").textContent = "New Queen";
       $("#f-id").value = "";
       F("status").value = "alive";
-      F("year").value = new Date().getFullYear();
       const today = new Date().toISOString().slice(0, 10);
-      ["graft_date", "emergence_date", "mating_date", "status_date"].forEach((f) => {
+      ["graft_date", "emergence_date", "status_date"].forEach((f) => {
         if (F(f)) F(f).value = today;
       });
       $("#form-delete").classList.add("hidden");
@@ -437,7 +436,17 @@
       row.mother_queen_id = F("mother_queen_id").value || null;
       row.replaced_by_id = F("replaced_by_id").value || null;
       RATING_FIELDS.forEach((f) => (row[f] = ratingState[f] ?? null));
-      if (row.year) row.year = parseInt(row.year, 10);
+      // Year is no longer entered manually — derive it from a date so the
+      // year filter, "reared by year" chart, and lineage grouping keep working.
+      const dateForYear = row.emergence_date || row.graft_date || row.status_date;
+      if (dateForYear) {
+        row.year = parseInt(String(dateForYear).slice(0, 4), 10);
+      } else if (row.id) {
+        const existing = byId(row.id);
+        row.year = existing ? existing.year : new Date().getFullYear();
+      } else {
+        row.year = new Date().getFullYear();
+      }
 
       const saved = await data.saveQueen(row);
 
@@ -508,7 +517,7 @@
         <dl>
           <div class="text-honey-700 font-semibold text-xs uppercase mt-1 mb-1">Hive &amp; performance</div>
           ${row("Current hive", esc(q.current_hive))}
-          ${row("Mated status", [esc(q.mated_status), q.mating_date].filter(Boolean).join(" · "))}
+          ${row("Mated status", esc(q.mated_status || ""))}
           ${rate("Laying pattern", q.laying_pattern)}
           ${rate("Brood quality", q.brood_quality)}
           ${rate("Temperament", q.temperament)}
