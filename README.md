@@ -98,6 +98,7 @@ queen-tracker/
 
 - **Free.** Supabase free tier and GitHub Pages both cost nothing for this scale.
 - **Private.** Row-level security means only *your* logged-in account can read/write your queens and photos. Even though the repo can be public, your data is not in the repo — it's in your Supabase project.
+- **Auto sign-out.** For safety on shared or unattended devices, you're signed out automatically after 30 minutes of inactivity.
 - **Portable.** Export to JSON/CSV whenever you want a backup.
 
 ## Troubleshooting

@@ -110,14 +110,57 @@
     }
   });
 
+  // ---------- idle auto-logout ----------
+  // Sign the user out after this many ms with no interaction.
+  const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+  const IDLE_EVENTS = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "click"];
+  const IDLE_OPTS = { passive: true, capture: true }; // capture: also catch scrolls inside modals/lists
+  let idleLast = Date.now();
+  let idleInterval = null;
+  let idleWatching = false;
+  let idleLoggedOut = false; // set when logout was triggered by inactivity (vs. manual sign-out)
+  const bumpIdle = () => { idleLast = Date.now(); };
+
+  function startIdleWatch() {
+    if (idleWatching) return;
+    idleWatching = true;
+    idleLast = Date.now();
+    IDLE_EVENTS.forEach((ev) => window.addEventListener(ev, bumpIdle, IDLE_OPTS));
+    // Poll instead of one long timer so sleep/background-tab throttling can't skip the logout.
+    idleInterval = setInterval(() => {
+      if (Date.now() - idleLast >= IDLE_TIMEOUT_MS) {
+        idleLoggedOut = true;
+        stopIdleWatch();
+        auth.signOut(); // onChange handler shows the sign-in screen
+      }
+    }, 15000);
+  }
+  function stopIdleWatch() {
+    if (!idleWatching) return;
+    idleWatching = false;
+    clearInterval(idleInterval);
+    idleInterval = null;
+    IDLE_EVENTS.forEach((ev) => window.removeEventListener(ev, bumpIdle, IDLE_OPTS));
+  }
+
   auth.onChange(async (session) => {
     if (session && session.user) {
       $("#auth-screen").classList.add("hidden");
       $("#menu-email").textContent = session.user.email;
+      startIdleWatch();
       await startApp();
     } else {
+      stopIdleWatch();
       $("#app").classList.add("hidden");
       $("#auth-screen").classList.remove("hidden");
+      if (idleLoggedOut) {
+        idleLoggedOut = false;
+        const msg = $("#auth-msg");
+        if (msg) {
+          msg.className = "text-sm mt-3 text-center text-hive-800/70";
+          msg.textContent = "Signed out after 30 minutes of inactivity.";
+        }
+      }
     }
     boot.classList.add("hidden");
   });
