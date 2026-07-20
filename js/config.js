@@ -12,7 +12,8 @@
 //  After editing, save the file. If you host on GitHub Pages, commit the change
 //  (or edit this file directly on github.com) and the live site updates.
 // ---------------------------------------------------------------------------
+
 window.QUEEN_TRACKER_CONFIG = {
-  SUPABASE_URL: "https://YOUR-PROJECT-ref.supabase.co",
-  SUPABASE_ANON_KEY: "YOUR-ANON-PUBLIC-KEY",
+  SUPABASE_URL: "https://ahizurligbkuwxzlsqmn.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFoaXp1cmxpZ2JrdXd4emxzcW1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1NjQxMzgsImV4cCI6Mj
 };
