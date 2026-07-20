@@ -26,7 +26,12 @@
   // ---- Auth -------------------------------------------------------------
   window.QT.auth = {
     signIn: (email, password) => client.auth.signInWithPassword({ email, password }),
-    signUp: (email, password) => client.auth.signUp({ email, password }),
+    signUp: (email, password) =>
+      client.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: window.location.href.split("#")[0].split("?")[0] },
+      }),
     signOut: () => client.auth.signOut(),
     getUser: async () => (await client.auth.getUser()).data.user,
     onChange: (cb) => client.auth.onAuthStateChange((_e, session) => cb(session)),

@@ -47,6 +47,30 @@
   }
 
   // ================= AUTH FLOW =================
+  const REMEMBER_KEY = "qt_remember_email";
+
+  // Prefill remembered email
+  try {
+    const savedEmail = localStorage.getItem(REMEMBER_KEY);
+    if (savedEmail) {
+      $("#auth-email").value = savedEmail;
+      $("#auth-remember").checked = true;
+      // focus the password field for a returning user
+      setTimeout(() => $("#auth-password").focus(), 50);
+    }
+  } catch (e) { /* localStorage unavailable */ }
+
+  // Password visibility toggle
+  $("#auth-toggle-pw").addEventListener("click", () => {
+    const p = $("#auth-password");
+    const btn = $("#auth-toggle-pw");
+    const showing = p.type === "text";
+    p.type = showing ? "password" : "text";
+    btn.textContent = showing ? "👁️" : "🙈";
+    btn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+    p.focus();
+  });
+
   let signupMode = false;
   $("#auth-toggle").addEventListener("click", () => {
     signupMode = !signupMode;
@@ -62,6 +86,11 @@
     const msg = $("#auth-msg");
     msg.className = "text-sm mt-3 text-center text-hive-800/70";
     msg.textContent = "…";
+    // remember (or forget) the email on this device
+    try {
+      if ($("#auth-remember").checked) localStorage.setItem(REMEMBER_KEY, email);
+      else localStorage.removeItem(REMEMBER_KEY);
+    } catch (e) { /* localStorage unavailable */ }
     try {
       if (signupMode) {
         const { error } = await auth.signUp(email, password);

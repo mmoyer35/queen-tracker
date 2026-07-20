@@ -70,10 +70,18 @@
         <p class="text-sm text-hive-800/60 mt-1">Sign in to your apiary records</p>
       </div>
       <form id="auth-form" class="mt-6 space-y-3">
-        <input id="auth-email" type="email" required placeholder="you@email.com"
+        <input id="auth-email" type="email" required placeholder="you@email.com" autocomplete="username"
                class="w-full border border-honey-200 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-honey-400 outline-none" />
-        <input id="auth-password" type="password" required minlength="6" placeholder="Password (min 6 chars)"
-               class="w-full border border-honey-200 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-honey-400 outline-none" />
+        <div class="relative">
+          <input id="auth-password" type="password" required minlength="6" placeholder="Password (min 6 chars)" autocomplete="current-password"
+                 class="w-full border border-honey-200 rounded-lg px-3 py-2.5 pr-12 focus:ring-2 focus:ring-honey-400 outline-none" />
+          <button type="button" id="auth-toggle-pw" aria-label="Show password"
+                  class="absolute right-1 top-1/2 -translate-y-1/2 text-hive-800/50 hover:text-honey-700 rounded-md px-2 py-1 text-base">👁️</button>
+        </div>
+        <label class="flex items-center gap-2 text-sm text-hive-800/70 select-none cursor-pointer">
+          <input type="checkbox" id="auth-remember" class="w-4 h-4 rounded border-honey-300 accent-honey-500" />
+          Remember my email on this device
+        </label>
         <button id="auth-submit" type="submit"
                 class="w-full bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg py-2.5 transition">Sign in</button>
       </form>
