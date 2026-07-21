@@ -57,20 +57,33 @@
       return na - nb;
     });
 
-    // order nodes within a row roughly by their mother's order (keeps lines tidy)
-    let orderIndex = {};
-    let counter = 0;
-    // seed: roots first in reading order
-    queens.filter((q) => isRoot(queens, q)).forEach((q) => (orderIndex[q.id] = counter++));
-    // BFS from roots
-    const queue = queens.filter((q) => isRoot(queens, q)).slice();
-    const seen = new Set(queue.map((q) => q.id));
-    while (queue.length) {
-      const q = queue.shift();
-      childrenOf(queens, q.id).forEach((c) => {
-        if (!seen.has(c.id)) { orderIndex[c.id] = counter++; seen.add(c.id); queue.push(c); }
-      });
+    // Horizontal order within each row. Walk the lineage depth-first so every queen's
+    // whole branch stays contiguous, and visit siblings (and roots) with the MOST
+    // descendants first — so a prolific mother's branch sits on the left while childless
+    // or newly-added queens drift to the right.
+    const kidsOf = {};
+    queens.forEach((q) => { const m = q.mother_queen_id; if (m) (kidsOf[m] = kidsOf[m] || []).push(q); });
+    const descCount = {};
+    function countDesc(id) {
+      if (descCount[id] != null) return descCount[id];
+      descCount[id] = 0; // set first so an accidental cycle can't recurse forever
+      let n = 0;
+      for (const c of (kidsOf[id] || [])) n += 1 + countDesc(c.id);
+      return (descCount[id] = n);
     }
+    queens.forEach((q) => countDesc(q.id));
+    const baseIdx = {};
+    queens.forEach((q, i) => (baseIdx[q.id] = i)); // stable tie-break (original list order)
+    const sortSibs = (a, b) => (descCount[b.id] - descCount[a.id]) || (baseIdx[a.id] - baseIdx[b.id]);
+    const orderIndex = {};
+    let counter = 0;
+    const visit = (q, guard) => {
+      if (orderIndex[q.id] != null || guard.has(q.id)) return;
+      guard.add(q.id);
+      orderIndex[q.id] = counter++;
+      (kidsOf[q.id] || []).slice().sort(sortSibs).forEach((c) => visit(c, guard));
+    };
+    queens.filter((q) => isRoot(queens, q)).sort(sortSibs).forEach((r) => visit(r, new Set()));
     queens.forEach((q) => { if (orderIndex[q.id] == null) orderIndex[q.id] = counter++; });
     rowKeys.forEach((k) => rowsMap[k].sort((a, b) => orderIndex[a.id] - orderIndex[b.id]));
 

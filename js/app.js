@@ -17,7 +17,9 @@
 
   // Local cache of queens for fast rendering / lineage / dropdowns
   let QUEENS = [];
-  let RATING_FIELDS = ["laying_pattern", "temperament", "honey_production", "hygienic_behavior", "mite_resistance"];
+  let RATING_FIELDS = ["laying_pattern", "temperament", "honey_production", "hygienic_behavior", "mite_resistance", "harbo_assay"];
+  // Rating fields whose scale is not the default 1–5 (Harbo assay tops out at 4).
+  const RATING_MAX = { harbo_assay: 4 };
   // Photos staged in the form but not yet uploaded: { file, url, isPrimary }.
   let pendingPhotos = [];
   // Already-saved photos of the queen being edited, cached as { photo, url } so the
@@ -43,10 +45,10 @@
     sold: "bg-purple-100 text-purple-700", lost: "bg-red-100 text-red-600", banked: "bg-teal-100 text-teal-700",
   };
 
-  function ratingDots(v) {
+  function ratingDots(v, max = 5) {
     v = v || 0;
     let h = '<span class="inline-flex gap-0.5 align-middle">';
-    for (let i = 1; i <= 5; i++)
+    for (let i = 1; i <= max; i++)
       h += `<span class="rating-dot" style="background:${i <= v ? "#e89a1c" : "#f0dcae"}"></span>`;
     return h + "</span>";
   }
@@ -148,13 +150,22 @@
     IDLE_EVENTS.forEach((ev) => window.removeEventListener(ev, bumpIdle, IDLE_OPTS));
   }
 
+  // Track who's booted so we don't re-run the whole app on every auth event. Supabase
+  // re-emits SIGNED_IN / TOKEN_REFRESHED when the tab regains focus (auto token refresh);
+  // re-running startApp() there would re-render the grid and re-fetch every photo's signed
+  // URL, making images flicker/reload on each tab switch. Only (re)boot on a real sign-in.
+  let currentUserId = null;
   auth.onChange(async (session) => {
     if (session && session.user) {
       $("#auth-screen").classList.add("hidden");
       $("#menu-email").textContent = session.user.email;
       startIdleWatch();
-      await startApp();
+      if (session.user.id !== currentUserId) {
+        currentUserId = session.user.id;
+        await startApp();
+      }
     } else {
+      currentUserId = null;
       stopIdleWatch();
       $("#app").classList.add("hidden");
       $("#auth-screen").classList.remove("hidden");
@@ -318,9 +329,10 @@
     $$(".rating").forEach((box) => {
       if (box.dataset.built) return;
       const field = box.dataset.field;
+      const max = parseInt(box.dataset.max, 10) || 5;
       const wrap = document.createElement("div");
       wrap.className = "flex gap-1 mt-1";
-      for (let i = 1; i <= 5; i++) {
+      for (let i = 1; i <= max; i++) {
         const dot = document.createElement("button");
         dot.type = "button";
         dot.className = "w-7 h-7 rounded-full border border-honey-300 text-xs font-semibold";
@@ -691,7 +703,7 @@
     const repl = q.replaced_by_id ? byId(q.replaced_by_id) : null;
 
     const row = (lbl, val) => (val || val === 0 ? `<div class="flex gap-2 py-1 border-b border-honey-50"><dt class="w-40 shrink-0 text-hive-800/50 text-sm">${lbl}</dt><dd class="text-sm">${val}</dd></div>` : "");
-    const rate = (lbl, v) => (v ? `<div class="flex gap-2 py-1 border-b border-honey-50 items-center"><dt class="w-40 shrink-0 text-hive-800/50 text-sm">${lbl}</dt><dd>${ratingDots(v)} <span class="text-xs text-hive-800/50">${v}/5</span></dd></div>` : "");
+    const rate = (lbl, v, max = 5) => (v ? `<div class="flex gap-2 py-1 border-b border-honey-50 items-center"><dt class="w-40 shrink-0 text-hive-800/50 text-sm">${lbl}</dt><dd>${ratingDots(v, max)} <span class="text-xs text-hive-800/50">${v}/${max}</span></dd></div>` : "");
 
     body.innerHTML = `
       <div id="detail-photos" class="flex flex-wrap gap-2 mb-4"></div>
@@ -720,6 +732,7 @@
           ${row("Marking", esc(q.marking_color))}
           ${rate("Hygienic behavior", q.hygienic_behavior)}
           ${rate("Mite resistance", q.mite_resistance)}
+          ${rate("Harbo assay", q.harbo_assay, 4)}
         </dl>
       </div>
       ${q.notable_traits ? `<div class="mt-3"><div class="text-honey-700 font-semibold text-xs uppercase mb-1">Notable traits</div><p class="text-sm whitespace-pre-wrap">${esc(q.notable_traits)}</p></div>` : ""}

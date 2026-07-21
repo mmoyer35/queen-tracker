@@ -47,6 +47,7 @@ create table if not exists public.queens (
   marking_color     text,                        -- queen marking dot color (white/yellow/red/green/blue) or "unmarked"
   hygienic_behavior integer,                     -- 1-5
   mite_resistance   integer,                     -- 1-5
+  harbo_assay       integer,                     -- 1-4 (Harbo SMR/VSH suppressed-mite-reproduction assay)
   notable_traits    text,
 
   -- ---- Status & lifecycle ----
