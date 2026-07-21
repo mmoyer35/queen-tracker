@@ -120,10 +120,37 @@
     svg.style.overflow = "visible";
     wrap.appendChild(svg);
 
-    const statusRing = {
-      alive: "#22c55e", dead: "#9ca3af", superseded: "#f59e0b",
-      requeened: "#3b82f6", sold: "#a855f7", lost: "#ef4444", banked: "#14b8a6",
+    // ---- Lineage colors ----------------------------------------------------
+    // Each root queen (no tracked mother) gets a color; every descendant inherits it,
+    // so a whole family tree is one color. Roots are colored oldest-first and the palette
+    // cycles, so the 10th distinct lineage reuses the 1st color (green).
+    const LINEAGE_COLORS = [
+      "#22c55e", // green
+      "#eab308", // yellow
+      "#3b82f6", // blue
+      "#f97316", // orange
+      "#ec4899", // pink
+      "#a855f7", // purple
+      "#111827", // black
+      "#9ca3af", // gray
+      "#92400e", // brown
+    ];
+    const byIdAll = Object.fromEntries(queens.map((q) => [q.id, q]));
+    const rootId = {};
+    const findRoot = (q, guard) => {
+      if (rootId[q.id]) return rootId[q.id];
+      if (isRoot(queens, q) || guard.has(q.id)) return (rootId[q.id] = q.id);
+      guard.add(q.id);
+      const mom = byIdAll[q.mother_queen_id];
+      return (rootId[q.id] = mom ? findRoot(mom, guard) : q.id);
     };
+    queens.forEach((q) => findRoot(q, new Set()));
+    const rootColor = {};
+    queens
+      .filter((q) => rootId[q.id] === q.id) // the root queens themselves
+      .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+      .forEach((r, i) => (rootColor[r.id] = LINEAGE_COLORS[i % LINEAGE_COLORS.length]));
+    const colorOf = (q) => rootColor[rootId[q.id]] || "#e5d3a8";
 
     rowKeys.forEach((k) => {
       const rowEl = document.createElement("div");
@@ -143,7 +170,7 @@
       rowsMap[k].forEach((q) => {
         const node = document.createElement("div");
         node.className = "tree-node bg-white rounded-lg border card-shadow cursor-pointer";
-        node.style.cssText = `min-width:52px;max-width:120px;padding:5px 8px;border-color:${statusRing[q.status] || "#e5d3a8"};border-width:2px;`;
+        node.style.cssText = `min-width:52px;max-width:120px;padding:5px 8px;border-color:${colorOf(q)};border-width:2px;`;
         node.style.marginTop = (subLevel[q.id] || 0) * SAME_ROW_OFFSET + "px";
         node.dataset.id = q.id;
         node.innerHTML = `<div style="font-weight:700;color:#894b16;font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(q.queen_code)}</div>`;
@@ -175,14 +202,16 @@
         const to = centerOf(q.id, "top");
         if (!from || !to) return;
         const midY = (from.y + to.y) / 2;
+        const lineColor = colorOf(q); // child inherits its lineage color
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("d", `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`);
         path.setAttribute("class", "tree-connector");
+        path.style.stroke = lineColor; // inline beats the CSS class stroke
         svg.appendChild(path);
         // small arrowhead
         const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
         dot.setAttribute("cx", to.x); dot.setAttribute("cy", to.y); dot.setAttribute("r", "3");
-        dot.setAttribute("fill", "#cc7c12");
+        dot.setAttribute("fill", lineColor);
         svg.appendChild(dot);
       });
     });
