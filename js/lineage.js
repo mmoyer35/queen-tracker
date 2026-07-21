@@ -74,6 +74,26 @@
     queens.forEach((q) => { if (orderIndex[q.id] == null) orderIndex[q.id] = counter++; });
     rowKeys.forEach((k) => rowsMap[k].sort((a, b) => orderIndex[a.id] - orderIndex[b.id]));
 
+    // Within a row, nudge each queen slightly lower than her mother when both share
+    // the same row (e.g. a mother and her daughters in the same calendar year), so the
+    // parent→daughter link reads as a short downward drop instead of a flat side-by-side
+    // line. Cascades for same-year granddaughters. Mothers whose daughters fall in a later
+    // year are unaffected (offset 0).
+    const SAME_ROW_OFFSET = 30; // px of vertical stagger per same-row generation
+    const subLevel = {};
+    rowKeys.forEach((k) => {
+      const rowIds = new Set(rowsMap[k].map((q) => q.id));
+      const byIdRow = Object.fromEntries(rowsMap[k].map((q) => [q.id, q]));
+      const level = (q, guard) => {
+        if (subLevel[q.id] != null) return subLevel[q.id];
+        const momId = q.mother_queen_id;
+        if (!momId || !rowIds.has(momId) || guard.has(q.id)) return (subLevel[q.id] = 0);
+        guard.add(q.id);
+        return (subLevel[q.id] = level(byIdRow[momId], guard) + 1);
+      };
+      rowsMap[k].forEach((q) => level(q, new Set()));
+    });
+
     // build DOM
     const wrap = document.createElement("div");
     wrap.style.position = "relative";
@@ -111,6 +131,7 @@
         const node = document.createElement("div");
         node.className = "tree-node bg-white rounded-lg border card-shadow cursor-pointer";
         node.style.cssText = `min-width:52px;max-width:120px;padding:5px 8px;border-color:${statusRing[q.status] || "#e5d3a8"};border-width:2px;`;
+        node.style.marginTop = (subLevel[q.id] || 0) * SAME_ROW_OFFSET + "px";
         node.dataset.id = q.id;
         node.innerHTML = `<div style="font-weight:700;color:#894b16;font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(q.queen_code)}</div>`;
         node.addEventListener("click", () => onSelect(q.id));
