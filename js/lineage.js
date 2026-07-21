@@ -187,43 +187,48 @@
       const wrapBox = wrap.getBoundingClientRect();
       svg.setAttribute("width", wrap.scrollWidth);
       svg.setAttribute("height", wrap.scrollHeight);
-      const centerOf = (id, edge) => {
-        const el = wrap.querySelector(`.tree-node[data-id="${id}"]`);
-        if (!el) return null;
+      // Measure every node's laid-out geometry ONCE, before any transform is applied.
+      const geom = {};
+      queens.forEach((q) => {
+        const el = wrap.querySelector(`.tree-node[data-id="${q.id}"]`);
+        if (!el) return;
         const b = el.getBoundingClientRect();
-        return {
-          x: b.left - wrapBox.left + b.width / 2,
-          y: (edge === "top" ? b.top : b.bottom) - wrapBox.top,
-        };
-      };
+        geom[q.id] = { cx: b.left - wrapBox.left + b.width / 2, top: b.top - wrapBox.top, bottom: b.bottom - wrapBox.top };
+      });
 
-      // Center each parent horizontally over its children. Children keep their laid-out
-      // positions; a parent is nudged (visually, via transform, so layout/flow is untouched)
-      // to the midpoint of its children's span. Processed deepest-first so a parent centers
-      // over children that were themselves already centered (e.g. 0-1 over M-2 over daughters).
-      const centerX = (id) => { const c = centerOf(id, "top"); return c ? c.x : null; };
+      // Center each parent horizontally over its children's span (deepest-first, so a parent
+      // centers over children that were themselves already centered — 0-1 over M-2 over its
+      // daughters). Nodes are nudged via transform; connectors are then drawn from these
+      // COMPUTED centers (not re-measured rects), so the lines always follow the shifted nodes.
       const desiredX = {};
       queens.slice()
         .sort((a, b) => (depths[b.id] || 0) - (depths[a.id] || 0))
         .forEach((q) => {
-          const kids = (kidsOf[q.id] || []).filter((c) => wrap.querySelector(`.tree-node[data-id="${c.id}"]`));
-          if (!kids.length) { desiredX[q.id] = centerX(q.id); return; }
+          if (!geom[q.id]) return;
+          const kids = (kidsOf[q.id] || []).filter((c) => geom[c.id]);
+          if (!kids.length) { desiredX[q.id] = geom[q.id].cx; return; }
           const xs = kids.map((c) => desiredX[c.id]).filter((v) => v != null).sort((a, b) => a - b);
-          desiredX[q.id] = xs.length ? (xs[0] + xs[xs.length - 1]) / 2 : centerX(q.id);
+          desiredX[q.id] = xs.length ? (xs[0] + xs[xs.length - 1]) / 2 : geom[q.id].cx;
         });
       queens.forEach((q) => {
         const el = wrap.querySelector(`.tree-node[data-id="${q.id}"]`);
-        if (!el || desiredX[q.id] == null) return;
-        const cur = centerX(q.id);
-        if (cur == null) return;
-        const shift = desiredX[q.id] - cur;
+        if (!el || !geom[q.id] || desiredX[q.id] == null) return;
+        const shift = desiredX[q.id] - geom[q.id].cx;
         if (Math.abs(shift) > 0.5) el.style.transform = `translateX(${shift}px)`;
       });
 
+      // Connector endpoint from computed geometry: final center x + pre-transform y (y is
+      // unchanged by the horizontal nudge).
+      const finalPos = (id, edge) => {
+        const g = geom[id];
+        if (!g) return null;
+        return { x: desiredX[id] != null ? desiredX[id] : g.cx, y: edge === "top" ? g.top : g.bottom };
+      };
+
       queens.forEach((q) => {
         if (!q.mother_queen_id) return;
-        const from = centerOf(q.mother_queen_id, "bottom");
-        const to = centerOf(q.id, "top");
+        const from = finalPos(q.mother_queen_id, "bottom");
+        const to = finalPos(q.id, "top");
         if (!from || !to) return;
         const midY = (from.y + to.y) / 2;
         const lineColor = colorOf(q); // child inherits its lineage color
