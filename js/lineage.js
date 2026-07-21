@@ -77,7 +77,7 @@
     // build DOM
     const wrap = document.createElement("div");
     wrap.style.position = "relative";
-    wrap.style.minWidth = "max-content";
+    wrap.style.width = "100%";
 
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.style.position = "absolute";
@@ -96,9 +96,10 @@
       const rowEl = document.createElement("div");
       rowEl.className = "lin-row";
       rowEl.style.display = "flex";
-      rowEl.style.gap = "18px";
+      rowEl.style.flexWrap = "wrap";
+      rowEl.style.gap = "10px";
       rowEl.style.alignItems = "flex-start";
-      rowEl.style.margin = "0 0 46px 0";
+      rowEl.style.margin = "0 0 40px 0";
       rowEl.style.position = "relative";
 
       const lbl = document.createElement("div");
@@ -108,14 +109,10 @@
 
       rowsMap[k].forEach((q) => {
         const node = document.createElement("div");
-        node.className = "tree-node bg-white rounded-xl border card-shadow cursor-pointer";
-        node.style.cssText = `width:150px;padding:8px 10px;border-color:${statusRing[q.status] || "#e5d3a8"};border-width:2px;`;
+        node.className = "tree-node bg-white rounded-lg border card-shadow cursor-pointer";
+        node.style.cssText = `min-width:52px;max-width:120px;padding:5px 8px;border-color:${statusRing[q.status] || "#e5d3a8"};border-width:2px;`;
         node.dataset.id = q.id;
-        node.innerHTML = `
-          <div style="font-weight:700;color:#894b16;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(q.queen_code)}</div>
-          ${q.name ? `<div style="font-size:.72rem;color:#8a6a3a;">${esc(q.name)}</div>` : ""}
-          <div style="font-size:.68rem;color:#9a7b4a;margin-top:2px;">${q.race_line ? esc(q.race_line) : ""}${q.current_hive ? " · " + esc(q.current_hive) : ""}</div>
-          <div style="margin-top:3px;">${ratingDots(q.laying_pattern)}</div>`;
+        node.innerHTML = `<div style="font-weight:700;color:#894b16;font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(q.queen_code)}</div>`;
         node.addEventListener("click", () => onSelect(q.id));
         rowEl.appendChild(node);
       });
@@ -186,7 +183,6 @@
         ${q.name ? `<span class="text-sm text-hive-800/60">${esc(q.name)}</span>` : ""}
         ${q.year ? `<span class="text-xs text-hive-800/40">${q.year}</span>` : ""}
         ${q.race_line ? `<span class="text-xs bg-honey-100 text-honey-700 rounded px-1.5">${esc(q.race_line)}</span>` : ""}
-        <span class="ml-1">${ratingDots(q.laying_pattern)}</span>
         ${hasKids ? `<span class="text-xs text-hive-800/40">${kids.length} daughter${kids.length > 1 ? "s" : ""}</span>` : ""}`;
       row.querySelector(".link").addEventListener("click", () => onSelect(q.id));
       li.appendChild(row);
