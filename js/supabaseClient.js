@@ -96,6 +96,16 @@
       const { error } = await client.from("queen_photos").delete().eq("id", photo.id);
       if (error) throw error;
     },
+    async setPrimaryPhoto(photo) {
+      // one primary per queen: clear the rest, then mark this one
+      const { error: e1 } = await client
+        .from("queen_photos").update({ is_primary: false }).eq("queen_id", photo.queen_id);
+      if (e1) throw e1;
+      const { data, error } = await client
+        .from("queen_photos").update({ is_primary: true }).eq("id", photo.id).select().single();
+      if (error) throw error;
+      return data;
+    },
     async photoUrl(path) {
       const { data, error } = await client.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
       if (error) return null;
