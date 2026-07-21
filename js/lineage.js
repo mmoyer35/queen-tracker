@@ -92,7 +92,7 @@
     // parent→daughter link reads as a short downward drop instead of a flat side-by-side
     // line. Cascades for same-year granddaughters. Mothers whose daughters fall in a later
     // year are unaffected (offset 0).
-    const SAME_ROW_OFFSET = 30; // px of vertical stagger per same-row generation
+    const SAME_ROW_OFFSET = 62; // px of vertical stagger per same-row generation
     const subLevel = {};
     rowKeys.forEach((k) => {
       const rowIds = new Set(rowsMap[k].map((q) => q.id));
