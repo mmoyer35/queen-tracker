@@ -196,6 +196,30 @@
           y: (edge === "top" ? b.top : b.bottom) - wrapBox.top,
         };
       };
+
+      // Center each parent horizontally over its children. Children keep their laid-out
+      // positions; a parent is nudged (visually, via transform, so layout/flow is untouched)
+      // to the midpoint of its children's span. Processed deepest-first so a parent centers
+      // over children that were themselves already centered (e.g. 0-1 over M-2 over daughters).
+      const centerX = (id) => { const c = centerOf(id, "top"); return c ? c.x : null; };
+      const desiredX = {};
+      queens.slice()
+        .sort((a, b) => (depths[b.id] || 0) - (depths[a.id] || 0))
+        .forEach((q) => {
+          const kids = (kidsOf[q.id] || []).filter((c) => wrap.querySelector(`.tree-node[data-id="${c.id}"]`));
+          if (!kids.length) { desiredX[q.id] = centerX(q.id); return; }
+          const xs = kids.map((c) => desiredX[c.id]).filter((v) => v != null).sort((a, b) => a - b);
+          desiredX[q.id] = xs.length ? (xs[0] + xs[xs.length - 1]) / 2 : centerX(q.id);
+        });
+      queens.forEach((q) => {
+        const el = wrap.querySelector(`.tree-node[data-id="${q.id}"]`);
+        if (!el || desiredX[q.id] == null) return;
+        const cur = centerX(q.id);
+        if (cur == null) return;
+        const shift = desiredX[q.id] - cur;
+        if (Math.abs(shift) > 0.5) el.style.transform = `translateX(${shift}px)`;
+      });
+
       queens.forEach((q) => {
         if (!q.mother_queen_id) return;
         const from = centerOf(q.mother_queen_id, "bottom");
