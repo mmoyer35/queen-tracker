@@ -428,22 +428,47 @@
     const photos = await data.listPhotos(queenId);
     for (const p of photos) {
       const url = await data.photoUrl(p.storage_path);
-      const chip = document.createElement("div");
-      chip.className = "existing-photo relative group";
-      chip.innerHTML = `
-        <img src="${url}" class="w-16 h-16 object-cover rounded-lg border border-honey-200" />
-        <button type="button" data-act="crop" title="Crop" class="absolute -top-2 -left-2 bg-honey-500 text-white rounded-full w-5 h-5 text-xs leading-none">✂</button>
-        <button type="button" data-act="del" title="Remove" class="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs leading-none">×</button>`;
-      chip.querySelector('[data-act="del"]').addEventListener("click", async () => {
-        if (!confirm("Delete this photo?")) return;
-        await data.deletePhoto(p);
-        chip.remove();
-        toast("Photo deleted");
-      });
-      chip.querySelector('[data-act="crop"]').addEventListener("click", () => openCropper(p, queenId, url));
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.title = "Tap to crop or delete";
+      chip.className = "existing-photo block w-16 h-16 rounded-lg border border-honey-200 overflow-hidden hover:ring-2 hover:ring-honey-400";
+      chip.innerHTML = `<img src="${url}" class="w-full h-full object-cover" />`;
+      chip.addEventListener("click", () => openPhotoActions(p, queenId, url));
       box.appendChild(chip);
     }
   }
+
+  // ---- Saved-photo actions popup (crop / delete) ------------------------
+  let paPhoto = null, paQueenId = null, paUrl = null;
+  function closePhotoActions() {
+    paPhoto = paQueenId = paUrl = null;
+    $("#photo-actions-modal").classList.add("hidden");
+  }
+  function openPhotoActions(photo, queenId, url) {
+    paPhoto = photo; paQueenId = queenId; paUrl = url;
+    $("#pa-img").src = url;
+    $("#photo-actions-modal").classList.remove("hidden");
+  }
+  $("#pa-cancel").addEventListener("click", closePhotoActions);
+  $("#photo-actions-modal").addEventListener("click", (e) => { if (e.target.id === "photo-actions-modal") closePhotoActions(); });
+  $("#pa-crop").addEventListener("click", () => {
+    const photo = paPhoto, queenId = paQueenId, url = paUrl;
+    closePhotoActions();
+    openCropper(photo, queenId, url);
+  });
+  $("#pa-delete").addEventListener("click", async () => {
+    if (!paPhoto) return;
+    if (!confirm("Delete this photo?")) return;
+    const photo = paPhoto, queenId = paQueenId;
+    closePhotoActions();
+    try {
+      await data.deletePhoto(photo);
+      await renderExistingPhotos(queenId);
+      toast("Photo deleted");
+    } catch (err) {
+      toast("Delete failed: " + err.message, 4000);
+    }
+  });
 
   // ---- Photo cropping (Cropper.js) --------------------------------------
   let cropper = null, cropPhoto = null, cropQueenId = null;
