@@ -426,13 +426,17 @@
     // clear any previously rendered saved photos (keeps freshly staged ones)
     box.querySelectorAll(".existing-photo").forEach((el) => el.remove());
     const photos = await data.listPhotos(queenId);
+    // default photo first
+    photos.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0));
     for (const p of photos) {
       const url = await data.photoUrl(p.storage_path);
       const chip = document.createElement("button");
       chip.type = "button";
-      chip.title = "Tap to crop or delete";
-      chip.className = "existing-photo block w-16 h-16 rounded-lg border border-honey-200 overflow-hidden hover:ring-2 hover:ring-honey-400";
-      chip.innerHTML = `<img src="${url}" class="w-full h-full object-cover" />`;
+      chip.title = p.is_primary ? "Default photo — tap to manage" : "Tap to set default, crop, or delete";
+      chip.className = "existing-photo relative block w-16 h-16 rounded-lg border overflow-hidden hover:ring-2 hover:ring-honey-400 "
+        + (p.is_primary ? "border-honey-500 ring-2 ring-honey-400" : "border-honey-200");
+      chip.innerHTML = `<img src="${url}" class="w-full h-full object-cover" />`
+        + (p.is_primary ? `<span class="absolute top-0 left-0 bg-honey-500 text-white text-[10px] leading-none px-1 py-0.5 rounded-br-md">★</span>` : "");
       chip.addEventListener("click", () => openPhotoActions(p, queenId, url));
       box.appendChild(chip);
     }
@@ -447,6 +451,9 @@
   function openPhotoActions(photo, queenId, url) {
     paPhoto = photo; paQueenId = queenId; paUrl = url;
     $("#pa-img").src = url;
+    const defBtn = $("#pa-default");
+    defBtn.disabled = !!photo.is_primary;
+    defBtn.textContent = photo.is_primary ? "★ Default photo" : "★ Set as default photo";
     $("#photo-actions-modal").classList.remove("hidden");
   }
   $("#pa-cancel").addEventListener("click", closePhotoActions);
@@ -455,6 +462,19 @@
     const photo = paPhoto, queenId = paQueenId, url = paUrl;
     closePhotoActions();
     openCropper(photo, queenId, url);
+  });
+  $("#pa-default").addEventListener("click", async () => {
+    if (!paPhoto) return;
+    const photo = paPhoto, queenId = paQueenId;
+    closePhotoActions();
+    try {
+      await data.setPrimaryPhoto(photo);
+      await renderExistingPhotos(queenId);
+      loadThumb(queenId); // update the queen's main picture on the list card
+      toast("Default photo set ★");
+    } catch (err) {
+      toast("Couldn't set default: " + err.message, 4000);
+    }
   });
   $("#pa-delete").addEventListener("click", async () => {
     if (!paPhoto) return;
@@ -500,8 +520,9 @@
         canvas.toBlob((b) => (b ? res(b) : rej(new Error("Could not process image"))), "image/jpeg", 0.92));
       const file = new File([blob], `crop_${Date.now()}.jpg`, { type: "image/jpeg" });
       const oldPhoto = cropPhoto, queenId = cropQueenId;
-      await data.uploadPhoto(queenId, file, oldPhoto.caption);
+      const newPhoto = await data.uploadPhoto(queenId, file, oldPhoto.caption);
       await data.deletePhoto(oldPhoto);
+      if (oldPhoto.is_primary) { await data.setPrimaryPhoto(newPhoto); loadThumb(queenId); } // keep default status
       closeCropper();
       await renderExistingPhotos(queenId);
       toast("Photo cropped 🐝");
@@ -642,6 +663,7 @@
     // photos
     const pbox = $("#detail-photos");
     const photos = await data.listPhotos(id);
+    photos.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0)); // default photo first
     if (!photos.length) pbox.innerHTML = `<div class="w-full h-40 bg-honey-100 rounded-xl flex items-center justify-center text-5xl">🐝</div>`;
     for (const p of photos) {
       const url = await data.photoUrl(p.storage_path);

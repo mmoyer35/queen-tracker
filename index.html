@@ -296,9 +296,12 @@
   <div id="photo-actions-modal" class="hidden fixed inset-0 z-[55] bg-black/50 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl card-shadow max-w-xs w-full overflow-hidden">
       <img id="pa-img" alt="" class="w-full max-h-[55vh] object-contain bg-hive-900/5" />
-      <div class="p-3 grid grid-cols-2 gap-2">
-        <button type="button" id="pa-crop" class="rounded-lg px-4 py-2.5 bg-honey-100 text-honey-700 font-semibold hover:bg-honey-200">✂ Crop</button>
-        <button type="button" id="pa-delete" class="rounded-lg px-4 py-2.5 bg-red-50 text-red-600 font-semibold hover:bg-red-100">🗑 Delete</button>
+      <div class="p-3 space-y-2">
+        <button type="button" id="pa-default" class="w-full rounded-lg px-4 py-2.5 bg-honey-500 text-white font-semibold hover:bg-honey-600 disabled:opacity-60 disabled:cursor-default">★ Set as default photo</button>
+        <div class="grid grid-cols-2 gap-2">
+          <button type="button" id="pa-crop" class="rounded-lg px-4 py-2.5 bg-honey-100 text-honey-700 font-semibold hover:bg-honey-200">✂ Crop</button>
+          <button type="button" id="pa-delete" class="rounded-lg px-4 py-2.5 bg-red-50 text-red-600 font-semibold hover:bg-red-100">🗑 Delete</button>
+        </div>
       </div>
       <button type="button" id="pa-cancel" class="w-full px-4 py-2.5 border-t border-honey-100 text-hive-800/60 hover:bg-honey-50">Cancel</button>
     </div>
