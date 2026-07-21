@@ -18,7 +18,12 @@
   // Local cache of queens for fast rendering / lineage / dropdowns
   let QUEENS = [];
   let RATING_FIELDS = ["laying_pattern", "temperament", "honey_production", "hygienic_behavior", "mite_resistance"];
-  let pendingPhotos = []; // File[] staged in the form
+  // Photos staged in the form but not yet uploaded: { file, url, isPrimary }.
+  let pendingPhotos = [];
+  // Already-saved photos of the queen being edited, cached as { photo, url } so the
+  // form can re-render chips (default star, delete) without re-fetching signed URLs.
+  let savedPhotos = [];
+  let formQueenId = null; // id of the queen currently open in the form (null = new)
 
   // ---------- utilities ----------
   const toast = (msg, ms = 2200) => {
@@ -354,7 +359,9 @@
 
   function openForm(queen) {
     buildRatingWidgets();
-    pendingPhotos = [];
+    clearPending();
+    savedPhotos = [];
+    formQueenId = queen ? queen.id : null;
     $("#photo-preview").innerHTML = "";
     $("#f-photos").value = "";
     $("#queen-form").reset();
@@ -371,7 +378,7 @@
       F("replaced_by_id").value = queen.replaced_by_id || "";
       RATING_FIELDS.forEach((f) => setRating(f, queen[f]));
       $("#form-delete").classList.remove("hidden");
-      renderExistingPhotos(queen.id);
+      loadSavedPhotos(queen.id); // async: fills savedPhotos cache, then renders chips
     } else {
       $("#form-title").textContent = "New Queen";
       $("#f-id").value = "";
@@ -381,6 +388,7 @@
         if (F(f)) F(f).value = today;
       });
       $("#form-delete").classList.add("hidden");
+      renderFormPhotos();
     }
     toggleGraftDate();
     formModal.classList.remove("hidden");
@@ -396,7 +404,13 @@
       F("graft_date").value = new Date().toISOString().slice(0, 10);
     }
   }
-  $("#f-source_method").addEventListener("change", toggleGraftDate);
+  $("#f-source_method").addEventListener("change", () => {
+    toggleGraftDate();
+    // A caught swarm's queen emerged on an unknown earlier date, so clear the emergence
+    // date when the beekeeper picks "swarm caught" — but leave the field editable in case
+    // they do know it. (Only on selection, so an existing date isn't wiped on form open.)
+    if (F("source_method").value === "swarm caught") F("emergence_date").value = "";
+  });
   function closeForm() {
     formModal.classList.add("hidden");
     document.body.style.overflow = "";
@@ -405,100 +419,155 @@
   $("#form-close").addEventListener("click", closeForm);
   $("#form-cancel").addEventListener("click", closeForm);
 
-  // photo staging (shared by the file picker and the camera capture)
+  // ---- Photo staging (file picker + camera) -----------------------------
+  // Release object URLs and drop all staged (not-yet-uploaded) photos.
+  function clearPending() {
+    pendingPhotos.forEach((p) => { try { URL.revokeObjectURL(p.url); } catch (e) { /* ignore */ } });
+    pendingPhotos = [];
+  }
   function stageFiles(fileList) {
     for (const file of fileList) {
-      pendingPhotos.push(file);
-      const url = URL.createObjectURL(file);
-      const chip = document.createElement("div");
-      chip.className = "relative";
-      chip.innerHTML = `<img src="${url}" class="w-16 h-16 object-cover rounded-lg border border-honey-200" />`;
-      $("#photo-preview").appendChild(chip);
+      pendingPhotos.push({ file, url: URL.createObjectURL(file), isPrimary: false });
     }
+    renderFormPhotos();
   }
   $("#f-photos").addEventListener("change", (e) => { stageFiles(e.target.files); e.target.value = ""; });
   // dedicated camera capture (opens the camera directly on mobile)
   $("#btn-take-photo").addEventListener("click", () => $("#f-camera").click());
   $("#f-camera").addEventListener("change", (e) => { stageFiles(e.target.files); e.target.value = ""; });
 
-  async function renderExistingPhotos(queenId) {
-    const box = $("#photo-preview");
-    // clear any previously rendered saved photos (keeps freshly staged ones)
-    box.querySelectorAll(".existing-photo").forEach((el) => el.remove());
+  // Load the queen's already-saved photos into the cache, then render the chips.
+  async function loadSavedPhotos(queenId) {
+    formQueenId = queenId;
     const photos = await data.listPhotos(queenId);
-    // default photo first
-    photos.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0));
-    for (const p of photos) {
-      const url = await data.photoUrl(p.storage_path);
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.title = p.is_primary ? "Default photo — tap to manage" : "Tap to set default, crop, or delete";
-      chip.className = "existing-photo relative block w-16 h-16 rounded-lg border overflow-hidden hover:ring-2 hover:ring-honey-400 "
-        + (p.is_primary ? "border-honey-500 ring-2 ring-honey-400" : "border-honey-200");
-      chip.innerHTML = `<img src="${url}" class="w-full h-full object-cover" />`
-        + (p.is_primary ? `<span class="absolute top-0 left-0 bg-honey-500 text-white text-[10px] leading-none px-1 py-0.5 rounded-br-md">★</span>` : "");
-      chip.addEventListener("click", () => openPhotoActions(p, queenId, url));
-      box.appendChild(chip);
-    }
+    photos.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0)); // default first
+    const withUrls = [];
+    for (const p of photos) withUrls.push({ photo: p, url: await data.photoUrl(p.storage_path) });
+    if (formQueenId !== queenId) return; // form was reopened on another queen meanwhile
+    savedPhotos = withUrls;
+    renderFormPhotos();
   }
 
-  // ---- Saved-photo actions popup (crop / delete) ------------------------
-  let paPhoto = null, paQueenId = null, paUrl = null;
+  // One chip builder for both saved and pending photos.
+  function photoChip({ url, isDefault, badge, title, onClick }) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.title = title;
+    chip.className = "relative block w-16 h-16 rounded-lg border overflow-hidden hover:ring-2 hover:ring-honey-400 "
+      + (isDefault ? "border-honey-500 ring-2 ring-honey-400" : "border-honey-200");
+    chip.innerHTML = `<img src="${url}" class="w-full h-full object-cover" />`
+      + (isDefault ? `<span class="absolute top-0 left-0 bg-honey-500 text-white text-[10px] leading-none px-1 py-0.5 rounded-br-md">★</span>` : "")
+      + (badge ? `<span class="absolute bottom-0 right-0 bg-hive-900/60 text-white text-[9px] leading-none px-1 py-0.5 rounded-tl-md">${badge}</span>` : "");
+    chip.addEventListener("click", onClick);
+    return chip;
+  }
+
+  // Render saved chips first, then staged ("new") chips. A staged default overrides
+  // any saved default so only one ★ ever shows.
+  function renderFormPhotos() {
+    const box = $("#photo-preview");
+    box.innerHTML = "";
+    const pendingPrimary = pendingPhotos.some((p) => p.isPrimary);
+    savedPhotos.forEach((s) => {
+      box.appendChild(photoChip({
+        url: s.url,
+        isDefault: !!s.photo.is_primary && !pendingPrimary,
+        title: s.photo.is_primary ? "Default photo — tap to manage" : "Tap to set default, crop, or delete",
+        onClick: () => openPhotoActions({ kind: "saved", photo: s.photo, queenId: formQueenId, url: s.url }),
+      }));
+    });
+    pendingPhotos.forEach((p) => {
+      box.appendChild(photoChip({
+        url: p.url,
+        isDefault: p.isPrimary,
+        badge: "new",
+        title: "New photo — tap to set default, crop, or delete",
+        onClick: () => openPhotoActions({ kind: "pending", pending: p }),
+      }));
+    });
+  }
+
+  // ---- Photo actions popup (default / crop / delete) --------------------
+  // Works for both saved photos (act immediately) and staged photos (act locally,
+  // applied when the queen is saved).
+  let paCtx = null;
   function closePhotoActions() {
-    paPhoto = paQueenId = paUrl = null;
+    paCtx = null;
     $("#photo-actions-modal").classList.add("hidden");
   }
-  function openPhotoActions(photo, queenId, url) {
-    paPhoto = photo; paQueenId = queenId; paUrl = url;
+  function openPhotoActions(ctx) {
+    paCtx = ctx;
+    const isPending = ctx.kind === "pending";
+    const url = isPending ? ctx.pending.url : ctx.url;
+    const isPrimary = isPending ? ctx.pending.isPrimary : !!ctx.photo.is_primary;
     $("#pa-img").src = url;
     const defBtn = $("#pa-default");
-    defBtn.disabled = !!photo.is_primary;
-    defBtn.textContent = photo.is_primary ? "★ Default photo" : "★ Set as default photo";
+    defBtn.disabled = isPrimary;
+    defBtn.textContent = isPrimary ? "★ Default photo" : "★ Set as default photo";
     $("#photo-actions-modal").classList.remove("hidden");
   }
   $("#pa-cancel").addEventListener("click", closePhotoActions);
   $("#photo-actions-modal").addEventListener("click", (e) => { if (e.target.id === "photo-actions-modal") closePhotoActions(); });
   $("#pa-crop").addEventListener("click", () => {
-    const photo = paPhoto, queenId = paQueenId, url = paUrl;
+    const ctx = paCtx;
     closePhotoActions();
-    openCropper(photo, queenId, url);
+    if (ctx) openCropper(ctx);
   });
   $("#pa-default").addEventListener("click", async () => {
-    if (!paPhoto) return;
-    const photo = paPhoto, queenId = paQueenId;
+    const ctx = paCtx;
+    if (!ctx) return;
     closePhotoActions();
-    try {
-      await data.setPrimaryPhoto(photo);
-      await renderExistingPhotos(queenId);
-      loadThumb(queenId); // update the queen's main picture on the list card
-      toast("Default photo set ★");
-    } catch (err) {
-      toast("Couldn't set default: " + err.message, 4000);
+    if (ctx.kind === "pending") {
+      // exactly one default across everything
+      pendingPhotos.forEach((p) => (p.isPrimary = p === ctx.pending));
+      renderFormPhotos();
+      toast("Default set ★ — saves with the queen");
+    } else {
+      try {
+        await data.setPrimaryPhoto(ctx.photo);
+        savedPhotos.forEach((s) => (s.photo.is_primary = s.photo.id === ctx.photo.id));
+        pendingPhotos.forEach((p) => (p.isPrimary = false)); // saved default wins
+        renderFormPhotos();
+        loadThumb(ctx.queenId); // update the queen's main picture on the list card
+        toast("Default photo set ★");
+      } catch (err) {
+        toast("Couldn't set default: " + err.message, 4000);
+      }
     }
   });
   $("#pa-delete").addEventListener("click", async () => {
-    if (!paPhoto) return;
+    const ctx = paCtx;
+    if (!ctx) return;
     if (!confirm("Delete this photo?")) return;
-    const photo = paPhoto, queenId = paQueenId;
     closePhotoActions();
-    try {
-      await data.deletePhoto(photo);
-      await renderExistingPhotos(queenId);
-      toast("Photo deleted");
-    } catch (err) {
-      toast("Delete failed: " + err.message, 4000);
+    if (ctx.kind === "pending") {
+      try { URL.revokeObjectURL(ctx.pending.url); } catch (e) { /* ignore */ }
+      pendingPhotos = pendingPhotos.filter((p) => p !== ctx.pending);
+      renderFormPhotos();
+      toast("Photo removed");
+    } else {
+      try {
+        await data.deletePhoto(ctx.photo);
+        savedPhotos = savedPhotos.filter((s) => s.photo.id !== ctx.photo.id);
+        renderFormPhotos();
+        loadThumb(ctx.queenId);
+        toast("Photo deleted");
+      } catch (err) {
+        toast("Delete failed: " + err.message, 4000);
+      }
     }
   });
 
   // ---- Photo cropping (Cropper.js) --------------------------------------
-  let cropper = null, cropPhoto = null, cropQueenId = null;
+  let cropper = null, cropCtx = null;
   function closeCropper() {
     if (cropper) { cropper.destroy(); cropper = null; }
-    cropPhoto = cropQueenId = null;
+    cropCtx = null;
     $("#crop-modal").classList.add("hidden");
   }
-  function openCropper(photo, queenId, url) {
-    cropPhoto = photo; cropQueenId = queenId;
+  function openCropper(ctx) {
+    cropCtx = ctx;
+    const url = ctx.kind === "pending" ? ctx.pending.url : ctx.url;
     const img = $("#crop-img");
     if (cropper) { cropper.destroy(); cropper = null; }
     $("#crop-modal").classList.remove("hidden");
@@ -511,7 +580,7 @@
   $("#crop-cancel").addEventListener("click", closeCropper);
   $("#crop-close").addEventListener("click", closeCropper);
   $("#crop-apply").addEventListener("click", async () => {
-    if (!cropper) return;
+    if (!cropper || !cropCtx) return;
     const applyBtn = $("#crop-apply");
     applyBtn.disabled = true; applyBtn.textContent = "Saving…";
     try {
@@ -519,13 +588,25 @@
       const blob = await new Promise((res, rej) =>
         canvas.toBlob((b) => (b ? res(b) : rej(new Error("Could not process image"))), "image/jpeg", 0.92));
       const file = new File([blob], `crop_${Date.now()}.jpg`, { type: "image/jpeg" });
-      const oldPhoto = cropPhoto, queenId = cropQueenId;
-      const newPhoto = await data.uploadPhoto(queenId, file, oldPhoto.caption);
-      await data.deletePhoto(oldPhoto);
-      if (oldPhoto.is_primary) { await data.setPrimaryPhoto(newPhoto); loadThumb(queenId); } // keep default status
-      closeCropper();
-      await renderExistingPhotos(queenId);
-      toast("Photo cropped 🐝");
+      const ctx = cropCtx;
+      if (ctx.kind === "pending") {
+        // Swap the cropped file/preview in place — nothing hits the cloud until save.
+        try { URL.revokeObjectURL(ctx.pending.url); } catch (e) { /* ignore */ }
+        ctx.pending.file = file;
+        ctx.pending.url = URL.createObjectURL(file);
+        closeCropper();
+        renderFormPhotos();
+        toast("Photo cropped 🐝 — saves with the queen");
+      } else {
+        const oldPhoto = ctx.photo, queenId = ctx.queenId;
+        const newPhoto = await data.uploadPhoto(queenId, file, oldPhoto.caption);
+        await data.deletePhoto(oldPhoto);
+        if (oldPhoto.is_primary) await data.setPrimaryPhoto(newPhoto); // keep default status
+        closeCropper();
+        await loadSavedPhotos(queenId); // refresh cache + chips
+        loadThumb(queenId);
+        toast("Photo cropped 🐝");
+      }
     } catch (err) {
       toast("Crop failed: " + err.message, 4000);
     } finally {
@@ -559,7 +640,13 @@
 
       if (pendingPhotos.length) {
         saveBtn.textContent = "Uploading photos…";
-        for (const file of pendingPhotos) await data.uploadPhoto(saved.id, file);
+        let newPrimary = null;
+        for (const p of pendingPhotos) {
+          const up = await data.uploadPhoto(saved.id, p.file);
+          if (p.isPrimary) newPrimary = up;
+        }
+        // A staged photo marked default wins over any previously-saved default.
+        if (newPrimary) await data.setPrimaryPhoto(newPrimary);
       }
       toast("Queen saved 🐝");
       closeForm();
