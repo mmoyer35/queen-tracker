@@ -144,7 +144,7 @@
             <option value="laying_desc">Best laying pattern</option>
           </select>
         </div>
-        <div id="queens-grid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></div>
+        <div id="queens-grid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 justify-items-center"></div>
         <div id="queens-empty" class="hidden text-center py-20 text-hive-800/50">
           <div class="text-5xl">🍯</div>
           <p class="mt-3">No queens yet. Click <b>+ New Queen</b> to add your first one.</p>
@@ -332,6 +332,9 @@
 
   <!-- input helper classes -->
   <style>
+    /* Queen cards: ~15% narrower on multi-column screens (mobile stays full-width). */
+    .queen-card { width:100%; }
+    @media (min-width:640px){ .queen-card { max-width:310px; } }
     .lbl { display:block; font-size:.8rem; font-weight:600; color:#894b16; margin-bottom:.2rem; }
     .inp { width:100%; border:1px solid #fbe3ad; border-radius:.5rem; padding:.5rem .6rem; outline:none; background:#fffdf9; }
     .inp:focus { box-shadow:0 0 0 2px #f4b43f; }

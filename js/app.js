@@ -277,7 +277,7 @@
         const sc = STATUS_COLORS[q.status] || "bg-gray-100 text-gray-600";
         return `
         <div class="queen-card bg-white rounded-xl card-shadow overflow-hidden cursor-pointer hover:ring-2 hover:ring-honey-300" data-id="${q.id}">
-          <div class="h-32 bg-honey-100 flex items-center justify-center text-4xl thumb" data-thumb="${q.id}">🐝</div>
+          <div class="bg-honey-100 flex items-center justify-center text-4xl thumb" style="height:168px" data-thumb="${q.id}">🐝</div>
           <div class="p-3">
             <div class="flex items-center gap-2">
               <h3 class="font-bold text-honey-800 truncate">${esc(q.queen_code)}</h3>
