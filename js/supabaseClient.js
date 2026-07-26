@@ -170,5 +170,43 @@
       });
       return rec;
     },
+
+    // ---- Import (restore from JSON, or add from CSV) --------------------
+    // Rows WITH an id are upserted (restore — keeps lineage links intact);
+    // rows WITHOUT an id are inserted as new. Only real columns are kept.
+    async importQueens(rows) {
+      const user = await window.QT.auth.getUser();
+      const COLS = [
+        "id","queen_code","name","source_method","graft_date","emergence_date","year","season",
+        "mother_queen_id","drone_source","current_hive","mated_status","mating_date",
+        "laying_pattern","brood_quality","temperament","honey_production","productivity_notes",
+        "race_line","marking_color","hygienic_behavior","mite_resistance","harbo_assay","notable_traits",
+        "status","status_date","replaced_by_id","notes","created_at",
+      ];
+      const INTS = new Set(["year","laying_pattern","brood_quality","temperament","honey_production","hygienic_behavior","mite_resistance","harbo_assay"]);
+      const clean = rows.map((r) => {
+        const c = { user_id: user.id };
+        for (const k of COLS) {
+          if (!(k in r)) continue;
+          let v = r[k];
+          if (v === "" || v === undefined) v = null;
+          if (v !== null && INTS.has(k)) { const n = parseInt(v, 10); v = isNaN(n) ? null : n; }
+          c[k] = v;
+        }
+        return c;
+      }).filter((c) => c.queen_code); // a queen must at least have a code
+
+      const withId = clean.filter((c) => c.id);
+      const noId = clean.filter((c) => !c.id).map((c) => { const { id, ...rest } = c; return rest; });
+      if (withId.length) {
+        const { error } = await client.from("queens").upsert(withId, { onConflict: "id" });
+        if (error) throw error;
+      }
+      if (noId.length) {
+        const { error } = await client.from("queens").insert(noId);
+        if (error) throw error;
+      }
+      return { restored: withId.length, added: noId.length, skipped: rows.length - clean.length };
+    },
   };
 })();

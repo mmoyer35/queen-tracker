@@ -690,12 +690,12 @@
     grid.innerHTML = hives.map((h) => {
       const q = h.current;
       let svg = "";
-      try { svg = qrSvg(hiveUrl(h.label), 132); } catch (e) { svg = "<span class='text-xs text-red-500'>QR error</span>"; }
+      try { svg = qrSvg(hiveUrl(h.label), 104); } catch (e) { svg = "<span class='text-xs text-red-500'>QR error</span>"; }
       const sc = q ? (STATUS_COLORS[q.status] || "") : "";
       return `
       <div class="bg-white rounded-xl card-shadow p-4">
         <div class="flex items-start gap-3">
-          <div class="shrink-0">${svg}</div>
+          <div class="hive-thumb w-16 h-16 rounded-lg bg-honey-100 flex items-center justify-center text-2xl shrink-0 bg-cover bg-center" ${q ? `data-hivethumb="${q.id}"` : ""}>🐝</div>
           <div class="min-w-0 flex-1">
             <div class="font-bold text-honey-800">🏠 ${esc(h.label)}</div>
             ${q
@@ -704,6 +704,7 @@
               : `<div class="text-sm text-hive-800/40">No queen assigned</div>`}
             <div class="text-xs text-hive-800/40 mt-1">${h.count} queen${h.count !== 1 ? "s" : ""} in history</div>
           </div>
+          <div class="shrink-0">${svg}</div>
         </div>
         <div class="flex gap-2 mt-3">
           <button class="hive-open flex-1 text-sm border border-honey-200 hover:bg-honey-50 rounded-lg py-1.5" data-hive="${esc(h.label)}">Open</button>
@@ -713,6 +714,22 @@
     }).join("");
     $$(".hive-open", grid).forEach((b) => b.addEventListener("click", () => openHive(b.dataset.hive)));
     $$(".hive-qr", grid).forEach((b) => b.addEventListener("click", () => openQrModal(b.dataset.hive)));
+    // Load each hive's photo (its current queen's primary photo) into the thumbnail.
+    for (const h of hives) {
+      if (h.current) loadPhotoInto(grid.querySelector(`[data-hivethumb="${h.current.id}"]`), h.current.id);
+    }
+  }
+
+  // Fill an element's background with a queen's primary photo (used by hive cards).
+  async function loadPhotoInto(el, queenId) {
+    if (!el) return;
+    try {
+      const photos = await data.listPhotos(queenId);
+      if (!photos.length) return;
+      const primary = photos.find((p) => p.is_primary) || photos[0];
+      const url = await data.photoUrl(primary.storage_path);
+      if (url) { el.style.backgroundImage = `url('${url}')`; el.textContent = ""; }
+    } catch (e) { /* keep the 🐝 fallback */ }
   }
 
   function openHive(label) {
@@ -741,13 +758,20 @@
     try { await navigator.clipboard.writeText(hiveUrl(qrCurrentLabel)); toast("Link copied"); }
     catch (e) { toast("Copy failed — long-press the link to copy"); }
   });
-  $("#qr-print").addEventListener("click", () => printLabels([qrCurrentLabel]));
+  $("#qr-print").addEventListener("click", () => printLabels([qrCurrentLabel], ($("#qr-print-size") || {}).value || "medium"));
 
   // ---- Printable label sheet ----
-  function printLabels(labels) {
+  // Sizes control how many labels fit per page. w = label width (px), qr = QR px, name = label font.
+  const LABEL_SIZES = {
+    small:  { w: 180, qr: 150, name: 18, hint: 10 },
+    medium: { w: 264, qr: 220, name: 24, hint: 12 },
+    large:  { w: 360, qr: 320, name: 30, hint: 14 },
+  };
+  function printLabels(labels, sizeKey) {
+    const s = LABEL_SIZES[sizeKey] || LABEL_SIZES.medium;
     const items = labels.map((l) => {
       let svg = "";
-      try { svg = qrSvg(hiveUrl(l), 240); } catch (e) { svg = ""; }
+      try { svg = qrSvg(hiveUrl(l), s.qr); } catch (e) { svg = ""; }
       return `<div class="label"><div class="qr">${svg}</div><div class="name">🏠 ${esc(l)}</div><div class="hint">Scan to open this hive</div></div>`;
     }).join("");
     const w = window.open("", "_blank");
@@ -755,10 +779,10 @@
     w.document.write(`<!doctype html><html><head><title>Hive QR labels</title><style>
       *{box-sizing:border-box} body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:0;padding:16px;color:#2b220f}
       .sheet{display:flex;flex-wrap:wrap;gap:16px}
-      .label{border:2px dashed #e0b96a;border-radius:12px;padding:14px;width:264px;text-align:center;page-break-inside:avoid}
-      .qr svg{width:220px;height:220px}
-      .name{font-size:24px;font-weight:800;margin-top:8px;color:#894b16}
-      .hint{font-size:12px;color:#999;margin-top:2px}
+      .label{border:2px dashed #e0b96a;border-radius:12px;padding:14px;width:${s.w}px;text-align:center;page-break-inside:avoid}
+      .qr svg{width:${s.qr}px;height:${s.qr}px}
+      .name{font-size:${s.name}px;font-weight:800;margin-top:8px;color:#894b16}
+      .hint{font-size:${s.hint}px;color:#999;margin-top:2px}
       @media print{.label{border-color:#bbb}}
     </style></head><body><div class="sheet">${items}</div>
     <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
@@ -770,7 +794,7 @@
   $("#hives-print-all").addEventListener("click", () => {
     const labels = deriveHives().map((h) => h.label);
     if (!labels.length) return toast("No hives to print yet");
-    printLabels(labels);
+    printLabels(labels, ($("#hives-print-size") || {}).value || "medium");
   });
 
   // ---- Deep link: open a hive/queen from a scanned QR (?hive= / ?queen=) ----
@@ -1015,6 +1039,61 @@
     download(`queen-tracker-${new Date().toISOString().slice(0,10)}.csv`, [cols.join(","), ...rows].join("\n"), "text/csv");
     toast("Exported CSV");
   }
+
+  // ================= IMPORT =================
+  // Minimal RFC-4180-ish CSV parser (handles quotes, commas & newlines in fields).
+  function parseCSV(text) {
+    const rows = [];
+    let field = "", row = [], inQ = false, i = 0;
+    while (i < text.length) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i += 2; continue; } inQ = false; i++; continue; }
+        field += ch; i++; continue;
+      }
+      if (ch === '"') { inQ = true; i++; continue; }
+      if (ch === ",") { row.push(field); field = ""; i++; continue; }
+      if (ch === "\r") { i++; continue; }
+      if (ch === "\n") { row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+      field += ch; i++;
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  }
+  function csvToObjects(text) {
+    const rows = parseCSV(text).filter((r) => !(r.length === 1 && r[0] === ""));
+    if (rows.length < 2) return [];
+    const headers = rows[0].map((h) => h.trim());
+    return rows.slice(1).map((r) => {
+      const o = {}; headers.forEach((h, idx) => (o[h] = r[idx] == null ? "" : r[idx])); return o;
+    });
+  }
+
+  $("#menu-import").addEventListener("click", () => $("#import-file").click());
+  $("#import-file").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      let rows;
+      const looksJson = /\.json$/i.test(file.name) || /^\s*[[{]/.test(text);
+      if (looksJson) {
+        const parsed = JSON.parse(text);
+        rows = Array.isArray(parsed) ? parsed : (parsed.queens || [parsed]);
+      } else {
+        rows = csvToObjects(text);
+      }
+      if (!rows || !rows.length) return toast("Nothing to import from that file");
+      if (!confirm(`Import ${rows.length} record(s) from "${file.name}"?\n\nRecords that share an ID with an existing queen will be updated; the rest are added new.`)) return;
+      toast("Importing…");
+      const res = await data.importQueens(rows);
+      await refresh();
+      toast(`Imported ✓  ${res.restored} restored, ${res.added} added${res.skipped ? ", " + res.skipped + " skipped" : ""}`, 3500);
+    } catch (err) {
+      toast("Import failed: " + (err.message || err), 5000);
+    }
+  });
 
   // close modals on backdrop click / escape
   [formModal, detailModal].forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) { m.classList.add("hidden"); document.body.style.overflow = ""; } }));

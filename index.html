@@ -123,7 +123,8 @@
               <div id="menu-email" class="px-4 py-2 text-xs text-hive-800/50 border-b border-honey-100 truncate"></div>
               <button id="menu-export" class="w-full text-left px-4 py-2 hover:bg-honey-50">⬇︎ Export data (JSON)</button>
               <button id="menu-export-csv" class="w-full text-left px-4 py-2 hover:bg-honey-50">⬇︎ Export queens (CSV)</button>
-              <button id="menu-signout" class="w-full text-left px-4 py-2 hover:bg-honey-50 text-red-600">Sign out</button>
+              <button id="menu-import" class="w-full text-left px-4 py-2 hover:bg-honey-50">⬆︎ Import data (JSON/CSV)</button>
+              <button id="menu-signout" class="w-full text-left px-4 py-2 hover:bg-honey-50 text-red-600 border-t border-honey-100">Sign out</button>
             </div>
           </div>
         </div>
@@ -169,6 +170,11 @@
         <div class="flex flex-wrap gap-2 items-center mb-4">
           <input id="hive-search" placeholder="🔎 Search hives…"
                  class="flex-1 min-w-[200px] border border-honey-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-honey-400" />
+          <select id="hives-print-size" title="Label size" class="border border-honey-200 rounded-lg px-2 py-2 text-sm">
+            <option value="small">Small (fit more)</option>
+            <option value="medium" selected>Medium</option>
+            <option value="large">Large (fit fewer)</option>
+          </select>
           <button id="hives-print-all" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-3 py-2 text-sm">🖨️ Print all labels</button>
         </div>
         <p class="text-sm text-hive-800/60 mb-3">Each hive gets a QR code. Print it, stick it on the box, and scanning it opens that hive's current queen. Hives are read from the <b>Current hive / colony</b> field on your queens.</p>
@@ -332,7 +338,15 @@
       <p id="qr-sub" class="text-xs text-hive-800/60 mb-3"></p>
       <div id="qr-holder" class="flex items-center justify-center bg-white p-2 rounded-lg border border-honey-100"></div>
       <p class="text-[11px] text-hive-800/40 mt-2 break-all" id="qr-url"></p>
-      <div class="flex gap-2 mt-4">
+      <div class="flex items-center gap-2 mt-3 text-sm">
+        <label for="qr-print-size" class="text-hive-800/60 shrink-0">Print size</label>
+        <select id="qr-print-size" class="flex-1 border border-honey-200 rounded-lg px-2 py-1.5">
+          <option value="small">Small</option>
+          <option value="medium" selected>Medium</option>
+          <option value="large">Large</option>
+        </select>
+      </div>
+      <div class="flex gap-2 mt-3">
         <button id="qr-print" class="flex-1 bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg py-2 text-sm">🖨️ Print</button>
         <button id="qr-copy" class="flex-1 border border-honey-200 hover:bg-honey-50 rounded-lg py-2 text-sm">Copy link</button>
       </div>
@@ -365,6 +379,9 @@
       <div id="review-body" class="p-5"></div>
     </div>
   </div>
+
+  <!-- Hidden file input for Import -->
+  <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" class="hidden" />
 
   <!-- Toast -->
   <div id="toast" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-hive-900 text-white px-4 py-2 rounded-lg text-sm card-shadow"></div>
