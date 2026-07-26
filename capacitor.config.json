@@ -1,0 +1,10 @@
+{
+  "appId": "com.mmoyer.queentracker",
+  "appName": "Queen Tracker",
+  "webDir": "www",
+  "server": { "androidScheme": "https", "iosScheme": "https" },
+  "ios": { "contentInset": "always", "limitsNavigationsToAppBoundDomains": false },
+  "plugins": {
+    "PushNotifications": { "presentationOptions": ["badge", "sound", "alert"] }
+  }
+}

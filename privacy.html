@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Queen Tracker — Privacy Policy</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           background:#fffdf7; color:#2b220f; max-width:760px; margin:0 auto; padding:32px 20px 80px; line-height:1.6; }
+    h1 { color:#894b16; } h2 { color:#a85e12; margin-top:1.8em; }
+    a { color:#a85e12; }
+    code { background:#fdf1d6; padding:1px 5px; border-radius:4px; }
+    .updated { color:#7a6a4a; font-size:.9rem; }
+  </style>
+</head>
+<body>
+  <h1>🐝 Queen Tracker — Privacy Policy</h1>
+  <p class="updated">Last updated: July 2026</p>
+
+  <p>Queen Tracker ("the app") is a personal record-keeping tool for beekeepers to track
+  queen bees, hives, and inspections. This policy explains what data the app collects, why,
+  and how it is protected. We aim to collect as little as possible.</p>
+
+  <h2>Who runs this app</h2>
+  <p>Queen Tracker is operated by an individual beekeeper-developer. Questions or requests:
+  <a href="mailto:mikemoyer35@gmail.com">mikemoyer35@gmail.com</a>.</p>
+
+  <h2>What we collect</h2>
+  <ul>
+    <li><strong>Account:</strong> your email address, used only to sign in and secure your data.</li>
+    <li><strong>Your records:</strong> the queen, hive, inspection, treatment, and feeding
+      information you enter.</li>
+    <li><strong>Photos:</strong> pictures you choose to attach to a queen.</li>
+    <li><strong>Voice notes:</strong> audio you record for a hive, plus the text transcript
+      produced from it.</li>
+  </ul>
+  <p>The app does <strong>not</strong> collect your location, contacts, or advertising
+  identifiers, and contains no third-party advertising or tracking.</p>
+
+  <h2>Where your data lives</h2>
+  <p>Your data is stored in <strong>Supabase</strong> (our database and file storage provider).
+  Every record is protected by row-level security, meaning you can only ever read or write your
+  own data. Photos and audio are kept in private storage buckets scoped to your account.</p>
+
+  <h2>Voice transcription (OpenAI)</h2>
+  <p>When you record a voice note, the audio is sent to <strong>OpenAI</strong> to transcribe it
+  (speech-to-text) and to structure it into an inspection, treatment, or feeding. Only that audio
+  and its transcript are sent; no account or identity information is included. OpenAI processes it
+  to return the result and does not use API data to train its models. See
+  <a href="https://openai.com/policies/privacy-policy" target="_blank" rel="noopener">OpenAI's privacy policy</a>.</p>
+
+  <h2>Device permissions</h2>
+  <ul>
+    <li><strong>Microphone</strong> — only while you are recording a voice note.</li>
+    <li><strong>Camera</strong> — only to scan a hive's QR code or take a photo.</li>
+    <li><strong>Photos</strong> — only to attach a picture you select.</li>
+  </ul>
+  <p>Permissions are requested when first used, and you can revoke them anytime in your device settings.</p>
+
+  <h2>Sharing</h2>
+  <p>We do not sell your data or share it with anyone except the service providers needed to run
+  the app (Supabase for storage, OpenAI for transcription), acting on our behalf.</p>
+
+  <h2>Your control</h2>
+  <p>You can export all your data as JSON or CSV from the app's menu at any time, and you can delete
+  individual records. To delete your entire account and all associated data, email
+  <a href="mailto:mikemoyer35@gmail.com">mikemoyer35@gmail.com</a> and we will remove it.</p>
+
+  <h2>Children</h2>
+  <p>Queen Tracker is intended for adult beekeepers and is not directed to children under 13.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the "Last updated" date above will change and the new version will be
+  posted here.</p>
+</body>
+</html>

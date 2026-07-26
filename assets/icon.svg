@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8ce78"/>
+      <stop offset="1" stop-color="#e89a1c"/>
+    </linearGradient>
+    <linearGradient id="crown" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe6a0"/>
+      <stop offset="1" stop-color="#f4b43f"/>
+    </linearGradient>
+    <clipPath id="bodyclip"><ellipse cx="512" cy="670" rx="200" ry="165"/></clipPath>
+  </defs>
+
+  <!-- full-bleed honey background (platforms apply their own rounding/mask) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Crown -->
+  <g>
+    <path d="M 362 360 L 362 250 L 442 320 L 512 232 L 582 320 L 662 250 L 662 360 Z"
+          fill="url(#crown)" stroke="#894b16" stroke-width="16" stroke-linejoin="round"/>
+    <rect x="362" y="356" width="300" height="40" rx="12" fill="url(#crown)" stroke="#894b16" stroke-width="16"/>
+    <circle cx="362" cy="250" r="22" fill="#ffe6a0" stroke="#894b16" stroke-width="14"/>
+    <circle cx="512" cy="228" r="24" fill="#ffe6a0" stroke="#894b16" stroke-width="14"/>
+    <circle cx="662" cy="250" r="22" fill="#ffe6a0" stroke="#894b16" stroke-width="14"/>
+  </g>
+
+  <!-- Bee -->
+  <g>
+    <!-- wings -->
+    <ellipse cx="430" cy="545" rx="120" ry="72" fill="#fffdf7" opacity="0.92" stroke="#894b16" stroke-width="9" transform="rotate(-24 430 545)"/>
+    <ellipse cx="594" cy="545" rx="120" ry="72" fill="#fffdf7" opacity="0.92" stroke="#894b16" stroke-width="9" transform="rotate(24 594 545)"/>
+    <!-- body -->
+    <ellipse cx="512" cy="670" rx="200" ry="165" fill="#3a2f16"/>
+    <g clip-path="url(#bodyclip)">
+      <rect x="422" y="500" width="70" height="360" fill="#f4b43f"/>
+      <rect x="542" y="500" width="70" height="360" fill="#f4b43f"/>
+    </g>
+    <ellipse cx="512" cy="670" rx="200" ry="165" fill="none" stroke="#2b220f" stroke-width="12"/>
+  </g>
+</svg>

@@ -1,0 +1,24 @@
+{
+  "name": "queen-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Queen Tracker — beekeeping queen & hive records (web + iOS/Android via Capacitor)",
+  "type": "module",
+  "scripts": {
+    "copy:web": "node scripts/copy-web.mjs",
+    "sync": "npm run copy:web && cap sync",
+    "add:android": "npm run copy:web && cap add android",
+    "add:ios": "npm run copy:web && cap add ios",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2",
+    "@capacitor/push-notifications": "^6.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}

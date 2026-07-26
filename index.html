@@ -7,6 +7,15 @@
   <meta name="description" content="Track queen bees reared via grafting: hives, laying pattern, genetics, lifecycle, and multi-year lineage." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>" />
 
+  <!-- PWA / installable app -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#e89a1c" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Queen Tracker" />
+
   <!-- Tailwind (Play CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -374,5 +383,14 @@
   <script src="js/supabaseClient.js"></script>
   <script src="js/lineage.js"></script>
   <script src="js/app.js"></script>
+
+  <!-- Register the service worker so the app installs & works offline -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+  </script>
 </body>
 </html>
