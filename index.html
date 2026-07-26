@@ -26,10 +26,6 @@
   <!-- Supabase JS (UMD) -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 
-  <!-- Cropper.js (photo cropping) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.css" />
-  <script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.js"></script>
-
   <style>
     body { background: #fffdf7; }
     .card-shadow { box-shadow: 0 1px 3px rgba(113,62,22,.08), 0 4px 16px rgba(113,62,22,.06); }
@@ -76,18 +72,25 @@
       <form id="auth-form" class="mt-6 space-y-3">
         <input id="auth-email" type="email" required placeholder="you@email.com" autocomplete="username"
                class="w-full border border-honey-200 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-honey-400 outline-none" />
+
+        <!-- Password + show/hide toggle -->
         <div class="relative">
           <input id="auth-password" type="password" required minlength="6" placeholder="Password (min 6 chars)" autocomplete="current-password"
-                 class="w-full border border-honey-200 rounded-lg px-3 py-2.5 pr-12 focus:ring-2 focus:ring-honey-400 outline-none" />
-          <button type="button" id="auth-toggle-pw" aria-label="Show password"
-                  class="absolute right-1 top-1/2 -translate-y-1/2 text-hive-800/50 hover:text-honey-700 rounded-md px-2 py-1 text-base">👁️</button>
+                 class="w-full border border-honey-200 rounded-lg px-3 py-2.5 pr-11 focus:ring-2 focus:ring-honey-400 outline-none" />
+          <button type="button" id="auth-toggle-pw" aria-label="Show password" aria-pressed="false"
+                  class="absolute right-1 top-1/2 -translate-y-1/2 text-hive-800/50 hover:text-honey-700 rounded-md px-2 py-1 text-base select-none">👁️</button>
         </div>
-        <label class="flex items-center gap-2 text-sm text-hive-800/70 select-none cursor-pointer">
-          <input type="checkbox" id="auth-remember" class="w-4 h-4 rounded border-honey-300 accent-honey-500" />
-          Remember my email on this device
-        </label>
+
+        <!-- Confirm password (account creation only) + its own toggle -->
+        <div id="auth-confirm-wrap" class="relative hidden">
+          <input id="auth-password2" type="password" minlength="6" placeholder="Confirm password" autocomplete="new-password"
+                 class="w-full border border-honey-200 rounded-lg px-3 py-2.5 pr-11 focus:ring-2 focus:ring-honey-400 outline-none" />
+          <button type="button" id="auth-toggle-pw2" aria-label="Show password" aria-pressed="false"
+                  class="absolute right-1 top-1/2 -translate-y-1/2 text-hive-800/50 hover:text-honey-700 rounded-md px-2 py-1 text-base select-none">👁️</button>
+        </div>
+
         <button id="auth-submit" type="submit"
-                class="w-full bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg py-2.5 transition">Sign in</button>
+                class="w-full bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg py-2.5 transition disabled:opacity-60 disabled:cursor-not-allowed">Sign in</button>
       </form>
       <p id="auth-msg" class="text-sm mt-3 text-center min-h-[1.25rem]"></p>
       <div class="text-center mt-2">
@@ -119,6 +122,7 @@
       <!-- Tabs -->
       <nav class="max-w-6xl mx-auto px-2 flex gap-1 text-sm">
         <button data-tab="queens"  class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent">Queens</button>
+        <button data-tab="hives"   class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent">Hives</button>
         <button data-tab="lineage" class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent">Lineage</button>
         <button data-tab="stats"   class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent">Overview</button>
       </nav>
@@ -144,10 +148,25 @@
             <option value="laying_desc">Best laying pattern</option>
           </select>
         </div>
-        <div id="queens-grid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 justify-items-center"></div>
+        <div id="queens-grid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></div>
         <div id="queens-empty" class="hidden text-center py-20 text-hive-800/50">
           <div class="text-5xl">🍯</div>
           <p class="mt-3">No queens yet. Click <b>+ New Queen</b> to add your first one.</p>
+        </div>
+      </section>
+
+      <!-- ---------- HIVES TAB ---------- -->
+      <section id="tab-hives" class="hidden">
+        <div class="flex flex-wrap gap-2 items-center mb-4">
+          <input id="hive-search" placeholder="🔎 Search hives…"
+                 class="flex-1 min-w-[200px] border border-honey-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-honey-400" />
+          <button id="hives-print-all" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-3 py-2 text-sm">🖨️ Print all labels</button>
+        </div>
+        <p class="text-sm text-hive-800/60 mb-3">Each hive gets a QR code. Print it, stick it on the box, and scanning it opens that hive's current queen. Hives are read from the <b>Current hive / colony</b> field on your queens.</p>
+        <div id="hives-grid" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></div>
+        <div id="hives-empty" class="hidden text-center py-20 text-hive-800/50">
+          <div class="text-5xl">🏠</div>
+          <p class="mt-3">No hives yet. Set a <b>Current hive / colony</b> value on a queen and it'll show up here.</p>
         </div>
       </section>
 
@@ -194,14 +213,16 @@
             <label class="block"><span class="lbl">Source method</span>
               <select id="f-source_method" class="inp">
                 <option value="">—</option><option>grafting</option><option>queen cell</option>
-                <option>walk-away split</option><option>swarm cell</option><option>swarm caught</option><option>emergency cell</option>
+                <option>walk-away split</option><option>swarm cell</option><option>emergency cell</option>
                 <option>purchased</option><option>other</option></select></label>
             <label class="block"><span class="lbl">Mother queen (lineage)</span>
               <select id="f-mother_queen_id" class="inp"></select></label>
-            <label id="graft-date-field" class="block"><span class="lbl">Graft date</span>
+            <label class="block"><span class="lbl">Graft date</span>
               <input id="f-graft_date" type="date" class="inp" /></label>
             <label class="block"><span class="lbl">Emergence date</span>
               <input id="f-emergence_date" type="date" class="inp" /></label>
+            <label class="block"><span class="lbl">Year</span>
+              <input id="f-year" type="number" min="1990" max="2100" class="inp" placeholder="2025" /></label>
             <label class="block"><span class="lbl">Season</span>
               <select id="f-season" class="inp"><option value="">—</option><option>spring</option><option>summer</option><option>fall</option></select></label>
             <label class="block sm:col-span-2"><span class="lbl">Drone source / mating area</span>
@@ -217,8 +238,11 @@
               <input id="f-current_hive" class="inp" placeholder="e.g. Hive 4" /></label>
             <label class="block"><span class="lbl">Mated status</span>
               <select id="f-mated_status" class="inp"><option value="">—</option><option>virgin</option><option>mated</option><option>laying</option><option>failed</option></select></label>
+            <label class="block"><span class="lbl">Mating date</span>
+              <input id="f-mating_date" type="date" class="inp" /></label>
             <div></div>
-            <div class="rating" data-field="laying_pattern"><span class="lbl">Laying pattern (5 = 100% solid)</span></div>
+            <div class="rating" data-field="laying_pattern"><span class="lbl">Laying pattern</span></div>
+            <div class="rating" data-field="brood_quality"><span class="lbl">Brood quality</span></div>
             <div class="rating" data-field="temperament"><span class="lbl">Temperament (5 = gentlest)</span></div>
             <div class="rating" data-field="honey_production"><span class="lbl">Honey production</span></div>
             <label class="block sm:col-span-2"><span class="lbl">Productivity notes</span>
@@ -235,9 +259,8 @@
               <datalist id="race-list"><option>Italian</option><option>Carniolan</option><option>Buckfast</option><option>Russian</option><option>Saskatraz</option><option>VSH</option><option>Caucasian</option><option>Local / feral</option></datalist></label>
             <label class="block"><span class="lbl">Marking color</span>
               <select id="f-marking_color" class="inp"><option value="">—</option><option>white</option><option>yellow</option><option>red</option><option>green</option><option>blue</option><option>unmarked</option></select></label>
-            <div class="rating" data-field="hygienic_behavior"><span class="lbl">Hygienic behavior (5 = most hygienic)</span></div>
-            <div class="rating" data-field="mite_resistance"><span class="lbl">Mite resistance (5 = most resistant)</span></div>
-            <div class="rating" data-field="harbo_assay" data-max="4"><span class="lbl">Harbo assay — suppressed mite reproduction (4 = highest)</span></div>
+            <div class="rating" data-field="hygienic_behavior"><span class="lbl">Hygienic behavior</span></div>
+            <div class="rating" data-field="mite_resistance"><span class="lbl">Mite resistance</span></div>
             <label class="block sm:col-span-2"><span class="lbl">Notable traits</span>
               <textarea id="f-notable_traits" rows="2" class="inp" placeholder="calm on comb, frugal in dearth, quick spring buildup…"></textarea></label>
           </div>
@@ -261,15 +284,10 @@
         <!-- Photos -->
         <fieldset>
           <legend class="text-honey-700 font-semibold text-sm uppercase tracking-wide mb-2">Photos</legend>
-          <div class="flex flex-wrap items-center gap-2">
-            <input id="f-photos" type="file" accept="image/*" multiple
-                   class="block flex-1 min-w-[12rem] text-sm text-hive-800/70 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-honey-100 file:text-honey-700 file:font-medium" />
-            <button type="button" id="btn-take-photo"
-                    class="shrink-0 rounded-lg px-4 py-2 border border-honey-200 hover:bg-honey-50 text-sm font-medium text-honey-700">📷 Take photo</button>
-            <input id="f-camera" type="file" accept="image/*" capture="environment" class="hidden" />
-          </div>
+          <input id="f-photos" type="file" accept="image/*" multiple capture="environment"
+                 class="block w-full text-sm text-hive-800/70 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-honey-100 file:text-honey-700 file:font-medium" />
           <div id="photo-preview" class="flex flex-wrap gap-2 mt-3"></div>
-          <p class="text-xs text-hive-800/50 mt-1">Photos upload to your private cloud storage when you save. Tap any photo to set it as the default, crop, or delete it — new photos apply those changes when you save the queen.</p>
+          <p class="text-xs text-hive-800/50 mt-1">Photos upload to your private cloud storage when you save.</p>
         </fieldset>
 
         <div class="flex gap-2 justify-end pt-2 border-t border-honey-100">
@@ -286,44 +304,56 @@
     <div class="max-w-2xl mx-auto bg-white rounded-2xl card-shadow">
       <div class="sticky top-0 bg-white rounded-t-2xl border-b border-honey-100 px-5 py-3 flex items-center gap-3 z-10">
         <h2 id="detail-title" class="font-bold text-lg text-honey-800"></h2>
-        <button id="detail-edit" class="ml-auto text-sm bg-honey-100 text-honey-700 rounded-lg px-3 py-1.5 font-medium">Edit</button>
+        <button id="detail-voice" class="ml-auto text-sm bg-honey-100 text-honey-700 rounded-lg px-3 py-1.5 font-medium hidden">🎙️ Voice</button>
+        <button id="detail-qr" class="text-sm bg-honey-100 text-honey-700 rounded-lg px-3 py-1.5 font-medium hidden">▦ QR</button>
+        <button id="detail-edit" class="text-sm bg-honey-100 text-honey-700 rounded-lg px-3 py-1.5 font-medium">Edit</button>
         <button id="detail-close" class="text-2xl leading-none text-hive-800/50 hover:text-hive-900">&times;</button>
       </div>
       <div id="detail-body" class="p-5"></div>
     </div>
   </div>
 
-  <!-- ================= PHOTO ACTIONS POPUP ================= -->
-  <div id="photo-actions-modal" class="hidden fixed inset-0 z-[55] bg-black/50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl card-shadow max-w-xs w-full overflow-hidden">
-      <img id="pa-img" alt="" class="w-full max-h-[55vh] object-contain bg-hive-900/5" />
-      <div class="p-3 space-y-2">
-        <button type="button" id="pa-default" class="w-full rounded-lg px-4 py-2.5 bg-honey-500 text-white font-semibold hover:bg-honey-600 disabled:opacity-60 disabled:cursor-default">★ Set as default photo</button>
-        <div class="grid grid-cols-2 gap-2">
-          <button type="button" id="pa-crop" class="rounded-lg px-4 py-2.5 bg-honey-100 text-honey-700 font-semibold hover:bg-honey-200">✂ Crop</button>
-          <button type="button" id="pa-delete" class="rounded-lg px-4 py-2.5 bg-red-50 text-red-600 font-semibold hover:bg-red-100">🗑 Delete</button>
-        </div>
+  <!-- ================= QR MODAL ================= -->
+  <div id="qr-modal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl card-shadow max-w-xs w-full p-6 text-center">
+      <div class="flex items-center gap-2 mb-1">
+        <h2 class="font-bold text-honey-800">Hive <span id="qr-hive-label"></span></h2>
+        <button id="qr-close" class="ml-auto text-2xl leading-none text-hive-800/50 hover:text-hive-900">&times;</button>
       </div>
-      <button type="button" id="pa-cancel" class="w-full px-4 py-2.5 border-t border-honey-100 text-hive-800/60 hover:bg-honey-50">Cancel</button>
+      <p id="qr-sub" class="text-xs text-hive-800/60 mb-3"></p>
+      <div id="qr-holder" class="flex items-center justify-center bg-white p-2 rounded-lg border border-honey-100"></div>
+      <p class="text-[11px] text-hive-800/40 mt-2 break-all" id="qr-url"></p>
+      <div class="flex gap-2 mt-4">
+        <button id="qr-print" class="flex-1 bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg py-2 text-sm">🖨️ Print</button>
+        <button id="qr-copy" class="flex-1 border border-honey-200 hover:bg-honey-50 rounded-lg py-2 text-sm">Copy link</button>
+      </div>
     </div>
   </div>
 
-  <!-- ================= CROP MODAL ================= -->
-  <div id="crop-modal" class="hidden fixed inset-0 z-[60] bg-black/60 overflow-y-auto p-3 sm:p-6">
-    <div class="max-w-xl mx-auto bg-white rounded-2xl card-shadow">
-      <div class="border-b border-honey-100 px-5 py-3 flex items-center gap-3">
-        <h2 class="font-bold text-lg text-honey-800">Crop photo</h2>
-        <button type="button" id="crop-close" class="ml-auto text-2xl leading-none text-hive-800/50 hover:text-hive-900">&times;</button>
+  <!-- ================= VOICE RECORD MODAL ================= -->
+  <div id="voice-modal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl card-shadow max-w-sm w-full p-6 text-center">
+      <div class="flex items-center gap-2 mb-1">
+        <h2 class="font-bold text-honey-800">🎙️ Voice note — <span id="voice-hive"></span></h2>
+        <button id="voice-close" class="ml-auto text-2xl leading-none text-hive-800/50 hover:text-hive-900">&times;</button>
       </div>
-      <div class="p-4">
-        <div class="bg-hive-900/5 rounded-lg overflow-hidden" style="max-height:60vh">
-          <img id="crop-img" alt="" class="block max-w-full" />
-        </div>
-        <div class="flex gap-2 justify-end pt-4">
-          <button type="button" id="crop-cancel" class="rounded-lg px-4 py-2 border border-honey-200 hover:bg-honey-50">Cancel</button>
-          <button type="button" id="crop-apply" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-5 py-2">Crop &amp; save</button>
-        </div>
+      <p id="voice-status" class="text-sm text-hive-800/60 mt-2 min-h-[2.5rem]">Tap the red button and describe the hive out loud.</p>
+      <div class="text-4xl font-mono my-3 text-honey-800" id="voice-timer">0:00</div>
+      <div class="flex justify-center">
+        <button id="voice-record" class="bg-red-500 hover:bg-red-600 text-white font-semibold rounded-full w-16 h-16 text-2xl flex items-center justify-center disabled:opacity-50">●</button>
       </div>
+      <p class="text-xs text-hive-800/40 mt-4">Whisper transcribes it, then it's sorted into an inspection, treatment, or feeding for you to review before saving.</p>
+    </div>
+  </div>
+
+  <!-- ================= REVIEW MODAL ================= -->
+  <div id="review-modal" class="hidden fixed inset-0 z-50 bg-black/40 overflow-y-auto p-3 sm:p-6">
+    <div class="max-w-lg mx-auto bg-white rounded-2xl card-shadow">
+      <div class="sticky top-0 bg-white rounded-t-2xl border-b border-honey-100 px-5 py-3 flex items-center gap-3 z-10">
+        <h2 class="font-bold text-lg text-honey-800">Review voice note</h2>
+        <button id="review-close" class="ml-auto text-2xl leading-none text-hive-800/50 hover:text-hive-900">&times;</button>
+      </div>
+      <div id="review-body" class="p-5"></div>
     </div>
   </div>
 
@@ -332,9 +362,6 @@
 
   <!-- input helper classes -->
   <style>
-    /* Queen cards: ~15% narrower on multi-column screens (mobile stays full-width). */
-    .queen-card { width:100%; }
-    @media (min-width:640px){ .queen-card { max-width:310px; } }
     .lbl { display:block; font-size:.8rem; font-weight:600; color:#894b16; margin-bottom:.2rem; }
     .inp { width:100%; border:1px solid #fbe3ad; border-radius:.5rem; padding:.5rem .6rem; outline:none; background:#fffdf9; }
     .inp:focus { box-shadow:0 0 0 2px #f4b43f; }
@@ -342,6 +369,7 @@
     .tab-btn:not(.active){ color:#fdf1d6; }
   </style>
 
+  <script src="js/vendor/qrcode-generator.js"></script>
   <script src="js/config.js"></script>
   <script src="js/supabaseClient.js"></script>
   <script src="js/lineage.js"></script>

@@ -26,12 +26,7 @@
   // ---- Auth -------------------------------------------------------------
   window.QT.auth = {
     signIn: (email, password) => client.auth.signInWithPassword({ email, password }),
-    signUp: (email, password) =>
-      client.auth.signUp({
-        email,
-        password,
-        options: { emailRedirectTo: window.location.href.split("#")[0].split("?")[0] },
-      }),
+    signUp: (email, password) => client.auth.signUp({ email, password }),
     signOut: () => client.auth.signOut(),
     getUser: async () => (await client.auth.getUser()).data.user,
     onChange: (cb) => client.auth.onAuthStateChange((_e, session) => cb(session)),
@@ -96,16 +91,6 @@
       const { error } = await client.from("queen_photos").delete().eq("id", photo.id);
       if (error) throw error;
     },
-    async setPrimaryPhoto(photo) {
-      // one primary per queen: clear the rest, then mark this one
-      const { error: e1 } = await client
-        .from("queen_photos").update({ is_primary: false }).eq("queen_id", photo.queen_id);
-      if (e1) throw e1;
-      const { data, error } = await client
-        .from("queen_photos").update({ is_primary: true }).eq("id", photo.id).select().single();
-      if (error) throw error;
-      return data;
-    },
     async photoUrl(path) {
       const { data, error } = await client.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
       if (error) return null;
@@ -131,6 +116,59 @@
     async deleteEvent(id) {
       const { error } = await client.from("queen_events").delete().eq("id", id);
       if (error) throw error;
+    },
+
+    // ---- Voice notes -> inspections / treatments / feedings -------------
+    // Upload a recorded audio blob to the user's private hive-audio bucket.
+    async uploadAudio(queenId, hiveLabel, blob, ext) {
+      const user = await window.QT.auth.getUser();
+      const folder = queenId || (hiveLabel ? "hive-" + String(hiveLabel).replace(/[^\w.\-]/g, "_") : "misc");
+      const path = `${user.id}/${folder}/${Date.now()}.${ext || "webm"}`;
+      const { error } = await client.storage.from("hive-audio").upload(path, blob, {
+        contentType: blob.type || "audio/webm", upsert: false,
+      });
+      if (error) throw error;
+      return path;
+    },
+
+    // Call the Edge Function: transcribe (Whisper) + parse (GPT). Returns { transcript, parsed }.
+    async transcribeVoice(payload) {
+      const { data, error } = await client.functions.invoke("voice-inspection", { body: payload });
+      if (error) {
+        let msg = error.message || "Transcription failed";
+        try { const ctx = await error.context.json(); if (ctx && ctx.error) msg = ctx.error; } catch (e) { /* ignore */ }
+        throw new Error(msg);
+      }
+      return data;
+    },
+
+    // Save a reviewed voice note: structured row + a timeline entry + an audit row.
+    async saveVoiceRecord(kind, row, meta) {
+      const user = await window.QT.auth.getUser();
+      const table = kind === "treatment" ? "treatments" : kind === "feeding" ? "feedings" : "inspections";
+      const clean = {};
+      for (const k in row) clean[k] = row[k] === "" ? null : row[k];
+      clean.user_id = user.id;
+      clean.queen_id = meta.queen_id || null;
+      clean.hive_label = meta.hive_label || null;
+      clean.raw_transcript = meta.transcript || null;
+      const { data: rec, error } = await client.from(table).insert(clean).select().single();
+      if (error) throw error;
+
+      const eventDate = clean.inspection_date || clean.treatment_date || clean.feed_date || new Date().toISOString().slice(0, 10);
+      if (meta.queen_id) {
+        await client.from("queen_events").insert({
+          user_id: user.id, queen_id: meta.queen_id, event_date: eventDate,
+          event_type: kind, note: clean.summary || meta.transcript || null,
+          ref_kind: kind, ref_id: rec.id,
+        });
+      }
+      await client.from("voice_notes").insert({
+        user_id: user.id, queen_id: meta.queen_id || null, hive_label: meta.hive_label || null,
+        audio_path: meta.audio_path || null, transcript: meta.transcript || null,
+        category: kind, ref_kind: kind, ref_id: rec.id, status: "saved",
+      });
+      return rec;
     },
   };
 })();

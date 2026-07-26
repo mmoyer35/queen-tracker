@@ -17,15 +17,8 @@
 
   // Local cache of queens for fast rendering / lineage / dropdowns
   let QUEENS = [];
-  let RATING_FIELDS = ["laying_pattern", "temperament", "honey_production", "hygienic_behavior", "mite_resistance", "harbo_assay"];
-  // Rating fields whose scale is not the default 1–5 (Harbo assay tops out at 4).
-  const RATING_MAX = { harbo_assay: 4 };
-  // Photos staged in the form but not yet uploaded: { file, url, isPrimary }.
-  let pendingPhotos = [];
-  // Already-saved photos of the queen being edited, cached as { photo, url } so the
-  // form can re-render chips (default star, delete) without re-fetching signed URLs.
-  let savedPhotos = [];
-  let formQueenId = null; // id of the queen currently open in the form (null = new)
+  let RATING_FIELDS = ["laying_pattern", "brood_quality", "temperament", "honey_production", "hygienic_behavior", "mite_resistance"];
+  let pendingPhotos = []; // File[] staged in the form
 
   // ---------- utilities ----------
   const toast = (msg, ms = 2200) => {
@@ -45,44 +38,48 @@
     sold: "bg-purple-100 text-purple-700", lost: "bg-red-100 text-red-600", banked: "bg-teal-100 text-teal-700",
   };
 
-  function ratingDots(v, max = 5) {
+  function ratingDots(v) {
     v = v || 0;
     let h = '<span class="inline-flex gap-0.5 align-middle">';
-    for (let i = 1; i <= max; i++)
+    for (let i = 1; i <= 5; i++)
       h += `<span class="rating-dot" style="background:${i <= v ? "#e89a1c" : "#f0dcae"}"></span>`;
     return h + "</span>";
   }
 
   // ================= AUTH FLOW =================
-  const REMEMBER_KEY = "qt_remember_email";
-
-  // Prefill remembered email
-  try {
-    const savedEmail = localStorage.getItem(REMEMBER_KEY);
-    if (savedEmail) {
-      $("#auth-email").value = savedEmail;
-      $("#auth-remember").checked = true;
-      // focus the password field for a returning user
-      setTimeout(() => $("#auth-password").focus(), 50);
-    }
-  } catch (e) { /* localStorage unavailable */ }
-
-  // Password visibility toggle
-  $("#auth-toggle-pw").addEventListener("click", () => {
-    const p = $("#auth-password");
-    const btn = $("#auth-toggle-pw");
-    const showing = p.type === "text";
-    p.type = showing ? "password" : "text";
-    btn.textContent = showing ? "👁️" : "🙈";
-    btn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
-    p.focus();
-  });
-
   let signupMode = false;
+
+  // Reusable show/hide password toggle for a (button, input) pair
+  function wirePwToggle(btnSel, inputSel) {
+    const btn = $(btnSel), input = $(inputSel);
+    if (!btn || !input) return;
+    btn.addEventListener("click", () => {
+      const revealing = input.type === "password";
+      input.type = revealing ? "text" : "password";
+      btn.textContent = revealing ? "🙈" : "👁️";
+      const lbl = revealing ? "Hide password" : "Show password";
+      btn.setAttribute("aria-label", lbl);
+      btn.setAttribute("aria-pressed", String(revealing));
+      input.focus();
+    });
+  }
+  wirePwToggle("#auth-toggle-pw", "#auth-password");
+  wirePwToggle("#auth-toggle-pw2", "#auth-password2");
+
+  // Switch between "sign in" and "create account" — shows the confirm field on signup
+  function setAuthMode(signup) {
+    signupMode = signup;
+    $("#auth-submit").textContent = signup ? "Create account" : "Sign in";
+    $("#auth-toggle").textContent = signup ? "Have an account? Sign in" : "New here? Create an account";
+    $("#auth-confirm-wrap").classList.toggle("hidden", !signup);
+    const pw = $("#auth-password"), pw2 = $("#auth-password2");
+    pw2.required = signup;
+    pw.setAttribute("autocomplete", signup ? "new-password" : "current-password");
+    if (!signup) pw2.value = "";
+  }
+
   $("#auth-toggle").addEventListener("click", () => {
-    signupMode = !signupMode;
-    $("#auth-submit").textContent = signupMode ? "Create account" : "Sign in";
-    $("#auth-toggle").textContent = signupMode ? "Have an account? Sign in" : "New here? Create an account";
+    setAuthMode(!signupMode);
     $("#auth-msg").textContent = "";
   });
 
@@ -91,21 +88,26 @@
     const email = $("#auth-email").value.trim();
     const password = $("#auth-password").value;
     const msg = $("#auth-msg");
+    const submitBtn = $("#auth-submit");
+
+    // On account creation, require the two passwords to match before hitting the server
+    if (signupMode && password !== $("#auth-password2").value) {
+      msg.className = "text-sm mt-3 text-center text-red-600";
+      msg.textContent = "Passwords don't match.";
+      $("#auth-password2").focus();
+      return;
+    }
+
     msg.className = "text-sm mt-3 text-center text-hive-800/70";
     msg.textContent = "…";
-    // remember (or forget) the email on this device
-    try {
-      if ($("#auth-remember").checked) localStorage.setItem(REMEMBER_KEY, email);
-      else localStorage.removeItem(REMEMBER_KEY);
-    } catch (e) { /* localStorage unavailable */ }
+    submitBtn.disabled = true;
     try {
       if (signupMode) {
         const { error } = await auth.signUp(email, password);
         if (error) throw error;
         msg.className = "text-sm mt-3 text-center text-green-700";
         msg.textContent = "Account created! If email confirmation is on, check your inbox, then sign in.";
-        signupMode = false;
-        $("#auth-submit").textContent = "Sign in";
+        setAuthMode(false); // back to sign-in mode, hide + clear the confirm field
       } else {
         const { error } = await auth.signIn(email, password);
         if (error) throw error;
@@ -114,69 +116,19 @@
     } catch (err) {
       msg.className = "text-sm mt-3 text-center text-red-600";
       msg.textContent = err.message || "Something went wrong.";
+    } finally {
+      submitBtn.disabled = false;
     }
   });
 
-  // ---------- idle auto-logout ----------
-  // Sign the user out after this many ms with no interaction.
-  const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-  const IDLE_EVENTS = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "click"];
-  const IDLE_OPTS = { passive: true, capture: true }; // capture: also catch scrolls inside modals/lists
-  let idleLast = Date.now();
-  let idleInterval = null;
-  let idleWatching = false;
-  let idleLoggedOut = false; // set when logout was triggered by inactivity (vs. manual sign-out)
-  const bumpIdle = () => { idleLast = Date.now(); };
-
-  function startIdleWatch() {
-    if (idleWatching) return;
-    idleWatching = true;
-    idleLast = Date.now();
-    IDLE_EVENTS.forEach((ev) => window.addEventListener(ev, bumpIdle, IDLE_OPTS));
-    // Poll instead of one long timer so sleep/background-tab throttling can't skip the logout.
-    idleInterval = setInterval(() => {
-      if (Date.now() - idleLast >= IDLE_TIMEOUT_MS) {
-        idleLoggedOut = true;
-        stopIdleWatch();
-        auth.signOut(); // onChange handler shows the sign-in screen
-      }
-    }, 15000);
-  }
-  function stopIdleWatch() {
-    if (!idleWatching) return;
-    idleWatching = false;
-    clearInterval(idleInterval);
-    idleInterval = null;
-    IDLE_EVENTS.forEach((ev) => window.removeEventListener(ev, bumpIdle, IDLE_OPTS));
-  }
-
-  // Track who's booted so we don't re-run the whole app on every auth event. Supabase
-  // re-emits SIGNED_IN / TOKEN_REFRESHED when the tab regains focus (auto token refresh);
-  // re-running startApp() there would re-render the grid and re-fetch every photo's signed
-  // URL, making images flicker/reload on each tab switch. Only (re)boot on a real sign-in.
-  let currentUserId = null;
   auth.onChange(async (session) => {
     if (session && session.user) {
       $("#auth-screen").classList.add("hidden");
       $("#menu-email").textContent = session.user.email;
-      startIdleWatch();
-      if (session.user.id !== currentUserId) {
-        currentUserId = session.user.id;
-        await startApp();
-      }
+      await startApp();
     } else {
-      currentUserId = null;
-      stopIdleWatch();
       $("#app").classList.add("hidden");
       $("#auth-screen").classList.remove("hidden");
-      if (idleLoggedOut) {
-        idleLoggedOut = false;
-        const msg = $("#auth-msg");
-        if (msg) {
-          msg.className = "text-sm mt-3 text-center text-hive-800/70";
-          msg.textContent = "Signed out after 30 minutes of inactivity.";
-        }
-      }
     }
     boot.classList.add("hidden");
   });
@@ -195,6 +147,7 @@
     $("#app").classList.remove("hidden");
     await refresh();
     switchTab("queens");
+    handleDeepLink();
   }
 
   async function refresh() {
@@ -206,6 +159,7 @@
     }
     buildYearFilter();
     renderQueens();
+    if (currentTab === "hives") renderHives();
     if (currentTab === "lineage") renderLineage();
     if (currentTab === "stats") renderStats();
   }
@@ -216,8 +170,10 @@
     currentTab = name;
     $$(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     $("#tab-queens").classList.toggle("hidden", name !== "queens");
+    $("#tab-hives").classList.toggle("hidden", name !== "hives");
     $("#tab-lineage").classList.toggle("hidden", name !== "lineage");
     $("#tab-stats").classList.toggle("hidden", name !== "stats");
+    if (name === "hives") renderHives();
     if (name === "lineage") renderLineage();
     if (name === "stats") renderStats();
   }
@@ -277,7 +233,7 @@
         const sc = STATUS_COLORS[q.status] || "bg-gray-100 text-gray-600";
         return `
         <div class="queen-card bg-white rounded-xl card-shadow overflow-hidden cursor-pointer hover:ring-2 hover:ring-honey-300" data-id="${q.id}">
-          <div class="bg-honey-100 flex items-center justify-center text-4xl thumb" style="height:200px" data-thumb="${q.id}">🐝</div>
+          <div class="h-32 bg-honey-100 flex items-center justify-center text-4xl thumb" data-thumb="${q.id}">🐝</div>
           <div class="p-3">
             <div class="flex items-center gap-2">
               <h3 class="font-bold text-honey-800 truncate">${esc(q.queen_code)}</h3>
@@ -319,8 +275,8 @@
   const formModal = $("#form-modal");
   const F = (k) => $("#f-" + k);
   const CORE_FIELDS = [
-    "queen_code","name","source_method","graft_date","emergence_date","season","drone_source",
-    "current_hive","mated_status","productivity_notes",
+    "queen_code","name","source_method","graft_date","emergence_date","year","season","drone_source",
+    "current_hive","mated_status","mating_date","productivity_notes",
     "race_line","marking_color","notable_traits",
     "status","status_date","notes",
   ];
@@ -329,10 +285,9 @@
     $$(".rating").forEach((box) => {
       if (box.dataset.built) return;
       const field = box.dataset.field;
-      const max = parseInt(box.dataset.max, 10) || 5;
       const wrap = document.createElement("div");
       wrap.className = "flex gap-1 mt-1";
-      for (let i = 1; i <= max; i++) {
+      for (let i = 1; i <= 5; i++) {
         const dot = document.createElement("button");
         dot.type = "button";
         dot.className = "w-7 h-7 rounded-full border border-honey-300 text-xs font-semibold";
@@ -371,9 +326,7 @@
 
   function openForm(queen) {
     buildRatingWidgets();
-    clearPending();
-    savedPhotos = [];
-    formQueenId = queen ? queen.id : null;
+    pendingPhotos = [];
     $("#photo-preview").innerHTML = "";
     $("#f-photos").value = "";
     $("#queen-form").reset();
@@ -390,39 +343,17 @@
       F("replaced_by_id").value = queen.replaced_by_id || "";
       RATING_FIELDS.forEach((f) => setRating(f, queen[f]));
       $("#form-delete").classList.remove("hidden");
-      loadSavedPhotos(queen.id); // async: fills savedPhotos cache, then renders chips
+      renderExistingPhotos(queen.id);
     } else {
       $("#form-title").textContent = "New Queen";
       $("#f-id").value = "";
       F("status").value = "alive";
-      const today = new Date().toISOString().slice(0, 10);
-      ["emergence_date", "status_date"].forEach((f) => {
-        if (F(f)) F(f).value = today;
-      });
+      F("year").value = new Date().getFullYear();
       $("#form-delete").classList.add("hidden");
-      renderFormPhotos();
     }
-    toggleGraftDate();
     formModal.classList.remove("hidden");
     document.body.style.overflow = "hidden";
   }
-  // Graft date only makes sense when the queen was reared by grafting.
-  function toggleGraftDate() {
-    const show = F("source_method").value === "grafting";
-    $("#graft-date-field").classList.toggle("hidden", !show);
-    if (!show) {
-      F("graft_date").value = "";
-    } else if (!F("graft_date").value) {
-      F("graft_date").value = new Date().toISOString().slice(0, 10);
-    }
-  }
-  $("#f-source_method").addEventListener("change", () => {
-    toggleGraftDate();
-    // A caught swarm's queen emerged on an unknown earlier date, so clear the emergence
-    // date when the beekeeper picks "swarm caught" — but leave the field editable in case
-    // they do know it. (Only on selection, so an existing date isn't wiped on form open.)
-    if (F("source_method").value === "swarm caught") F("emergence_date").value = "";
-  });
   function closeForm() {
     formModal.classList.add("hidden");
     document.body.style.overflow = "";
@@ -431,200 +362,38 @@
   $("#form-close").addEventListener("click", closeForm);
   $("#form-cancel").addEventListener("click", closeForm);
 
-  // ---- Photo staging (file picker + camera) -----------------------------
-  // Release object URLs and drop all staged (not-yet-uploaded) photos.
-  function clearPending() {
-    pendingPhotos.forEach((p) => { try { URL.revokeObjectURL(p.url); } catch (e) { /* ignore */ } });
-    pendingPhotos = [];
-  }
-  function stageFiles(fileList) {
-    for (const file of fileList) {
-      pendingPhotos.push({ file, url: URL.createObjectURL(file), isPrimary: false });
+  // photo staging
+  $("#f-photos").addEventListener("change", (e) => {
+    for (const file of e.target.files) {
+      pendingPhotos.push(file);
+      const url = URL.createObjectURL(file);
+      const chip = document.createElement("div");
+      chip.className = "relative";
+      chip.innerHTML = `<img src="${url}" class="w-16 h-16 object-cover rounded-lg border border-honey-200" />`;
+      $("#photo-preview").appendChild(chip);
     }
-    renderFormPhotos();
-  }
-  $("#f-photos").addEventListener("change", (e) => { stageFiles(e.target.files); e.target.value = ""; });
-  // dedicated camera capture (opens the camera directly on mobile)
-  $("#btn-take-photo").addEventListener("click", () => $("#f-camera").click());
-  $("#f-camera").addEventListener("change", (e) => { stageFiles(e.target.files); e.target.value = ""; });
+    e.target.value = "";
+  });
 
-  // Load the queen's already-saved photos into the cache, then render the chips.
-  async function loadSavedPhotos(queenId) {
-    formQueenId = queenId;
-    const photos = await data.listPhotos(queenId);
-    photos.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0)); // default first
-    const withUrls = [];
-    for (const p of photos) withUrls.push({ photo: p, url: await data.photoUrl(p.storage_path) });
-    if (formQueenId !== queenId) return; // form was reopened on another queen meanwhile
-    savedPhotos = withUrls;
-    renderFormPhotos();
-  }
-
-  // One chip builder for both saved and pending photos.
-  function photoChip({ url, isDefault, badge, title, onClick }) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.title = title;
-    chip.className = "relative block w-16 h-16 rounded-lg border overflow-hidden hover:ring-2 hover:ring-honey-400 "
-      + (isDefault ? "border-honey-500 ring-2 ring-honey-400" : "border-honey-200");
-    chip.innerHTML = `<img src="${url}" class="w-full h-full object-cover" />`
-      + (isDefault ? `<span class="absolute top-0 left-0 bg-honey-500 text-white text-[10px] leading-none px-1 py-0.5 rounded-br-md">★</span>` : "")
-      + (badge ? `<span class="absolute bottom-0 right-0 bg-hive-900/60 text-white text-[9px] leading-none px-1 py-0.5 rounded-tl-md">${badge}</span>` : "");
-    chip.addEventListener("click", onClick);
-    return chip;
-  }
-
-  // Render saved chips first, then staged ("new") chips. A staged default overrides
-  // any saved default so only one ★ ever shows.
-  function renderFormPhotos() {
+  async function renderExistingPhotos(queenId) {
     const box = $("#photo-preview");
-    box.innerHTML = "";
-    const pendingPrimary = pendingPhotos.some((p) => p.isPrimary);
-    savedPhotos.forEach((s) => {
-      box.appendChild(photoChip({
-        url: s.url,
-        isDefault: !!s.photo.is_primary && !pendingPrimary,
-        title: s.photo.is_primary ? "Default photo — tap to manage" : "Tap to set default, crop, or delete",
-        onClick: () => openPhotoActions({ kind: "saved", photo: s.photo, queenId: formQueenId, url: s.url }),
-      }));
-    });
-    pendingPhotos.forEach((p) => {
-      box.appendChild(photoChip({
-        url: p.url,
-        isDefault: p.isPrimary,
-        badge: "new",
-        title: "New photo — tap to set default, crop, or delete",
-        onClick: () => openPhotoActions({ kind: "pending", pending: p }),
-      }));
-    });
-  }
-
-  // ---- Photo actions popup (default / crop / delete) --------------------
-  // Works for both saved photos (act immediately) and staged photos (act locally,
-  // applied when the queen is saved).
-  let paCtx = null;
-  function closePhotoActions() {
-    paCtx = null;
-    $("#photo-actions-modal").classList.add("hidden");
-  }
-  function openPhotoActions(ctx) {
-    paCtx = ctx;
-    const isPending = ctx.kind === "pending";
-    const url = isPending ? ctx.pending.url : ctx.url;
-    const isPrimary = isPending ? ctx.pending.isPrimary : !!ctx.photo.is_primary;
-    $("#pa-img").src = url;
-    const defBtn = $("#pa-default");
-    defBtn.disabled = isPrimary;
-    defBtn.textContent = isPrimary ? "★ Default photo" : "★ Set as default photo";
-    $("#photo-actions-modal").classList.remove("hidden");
-  }
-  $("#pa-cancel").addEventListener("click", closePhotoActions);
-  $("#photo-actions-modal").addEventListener("click", (e) => { if (e.target.id === "photo-actions-modal") closePhotoActions(); });
-  $("#pa-crop").addEventListener("click", () => {
-    const ctx = paCtx;
-    closePhotoActions();
-    if (ctx) openCropper(ctx);
-  });
-  $("#pa-default").addEventListener("click", async () => {
-    const ctx = paCtx;
-    if (!ctx) return;
-    closePhotoActions();
-    if (ctx.kind === "pending") {
-      // exactly one default across everything
-      pendingPhotos.forEach((p) => (p.isPrimary = p === ctx.pending));
-      renderFormPhotos();
-      toast("Default set ★ — saves with the queen");
-    } else {
-      try {
-        await data.setPrimaryPhoto(ctx.photo);
-        savedPhotos.forEach((s) => (s.photo.is_primary = s.photo.id === ctx.photo.id));
-        pendingPhotos.forEach((p) => (p.isPrimary = false)); // saved default wins
-        renderFormPhotos();
-        loadThumb(ctx.queenId); // update the queen's main picture on the list card
-        toast("Default photo set ★");
-      } catch (err) {
-        toast("Couldn't set default: " + err.message, 4000);
-      }
-    }
-  });
-  $("#pa-delete").addEventListener("click", async () => {
-    const ctx = paCtx;
-    if (!ctx) return;
-    if (!confirm("Delete this photo?")) return;
-    closePhotoActions();
-    if (ctx.kind === "pending") {
-      try { URL.revokeObjectURL(ctx.pending.url); } catch (e) { /* ignore */ }
-      pendingPhotos = pendingPhotos.filter((p) => p !== ctx.pending);
-      renderFormPhotos();
-      toast("Photo removed");
-    } else {
-      try {
-        await data.deletePhoto(ctx.photo);
-        savedPhotos = savedPhotos.filter((s) => s.photo.id !== ctx.photo.id);
-        renderFormPhotos();
-        loadThumb(ctx.queenId);
+    const photos = await data.listPhotos(queenId);
+    for (const p of photos) {
+      const url = await data.photoUrl(p.storage_path);
+      const chip = document.createElement("div");
+      chip.className = "relative group";
+      chip.innerHTML = `
+        <img src="${url}" class="w-16 h-16 object-cover rounded-lg border border-honey-200" />
+        <button type="button" title="Remove" class="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs">×</button>`;
+      chip.querySelector("button").addEventListener("click", async () => {
+        if (!confirm("Delete this photo?")) return;
+        await data.deletePhoto(p);
+        chip.remove();
         toast("Photo deleted");
-      } catch (err) {
-        toast("Delete failed: " + err.message, 4000);
-      }
+      });
+      box.appendChild(chip);
     }
-  });
-
-  // ---- Photo cropping (Cropper.js) --------------------------------------
-  let cropper = null, cropCtx = null;
-  function closeCropper() {
-    if (cropper) { cropper.destroy(); cropper = null; }
-    cropCtx = null;
-    $("#crop-modal").classList.add("hidden");
   }
-  function openCropper(ctx) {
-    cropCtx = ctx;
-    const url = ctx.kind === "pending" ? ctx.pending.url : ctx.url;
-    const img = $("#crop-img");
-    if (cropper) { cropper.destroy(); cropper = null; }
-    $("#crop-modal").classList.remove("hidden");
-    img.onload = () => {
-      cropper = new Cropper(img, { viewMode: 1, autoCropArea: 1, background: false, movable: false, zoomable: false, rotatable: false });
-    };
-    img.crossOrigin = "anonymous";
-    img.src = url;
-  }
-  $("#crop-cancel").addEventListener("click", closeCropper);
-  $("#crop-close").addEventListener("click", closeCropper);
-  $("#crop-apply").addEventListener("click", async () => {
-    if (!cropper || !cropCtx) return;
-    const applyBtn = $("#crop-apply");
-    applyBtn.disabled = true; applyBtn.textContent = "Saving…";
-    try {
-      const canvas = cropper.getCroppedCanvas({ maxWidth: 2000, maxHeight: 2000 });
-      const blob = await new Promise((res, rej) =>
-        canvas.toBlob((b) => (b ? res(b) : rej(new Error("Could not process image"))), "image/jpeg", 0.92));
-      const file = new File([blob], `crop_${Date.now()}.jpg`, { type: "image/jpeg" });
-      const ctx = cropCtx;
-      if (ctx.kind === "pending") {
-        // Swap the cropped file/preview in place — nothing hits the cloud until save.
-        try { URL.revokeObjectURL(ctx.pending.url); } catch (e) { /* ignore */ }
-        ctx.pending.file = file;
-        ctx.pending.url = URL.createObjectURL(file);
-        closeCropper();
-        renderFormPhotos();
-        toast("Photo cropped 🐝 — saves with the queen");
-      } else {
-        const oldPhoto = ctx.photo, queenId = ctx.queenId;
-        const newPhoto = await data.uploadPhoto(queenId, file, oldPhoto.caption);
-        await data.deletePhoto(oldPhoto);
-        if (oldPhoto.is_primary) await data.setPrimaryPhoto(newPhoto); // keep default status
-        closeCropper();
-        await loadSavedPhotos(queenId); // refresh cache + chips
-        loadThumb(queenId);
-        toast("Photo cropped 🐝");
-      }
-    } catch (err) {
-      toast("Crop failed: " + err.message, 4000);
-    } finally {
-      applyBtn.disabled = false; applyBtn.textContent = "Crop & save";
-    }
-  });
 
   $("#queen-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -636,29 +405,13 @@
       row.mother_queen_id = F("mother_queen_id").value || null;
       row.replaced_by_id = F("replaced_by_id").value || null;
       RATING_FIELDS.forEach((f) => (row[f] = ratingState[f] ?? null));
-      // Year is no longer entered manually — derive it from a date so the
-      // year filter, "reared by year" chart, and lineage grouping keep working.
-      const dateForYear = row.emergence_date || row.graft_date || row.status_date;
-      if (dateForYear) {
-        row.year = parseInt(String(dateForYear).slice(0, 4), 10);
-      } else if (row.id) {
-        const existing = byId(row.id);
-        row.year = existing ? existing.year : new Date().getFullYear();
-      } else {
-        row.year = new Date().getFullYear();
-      }
+      if (row.year) row.year = parseInt(row.year, 10);
 
       const saved = await data.saveQueen(row);
 
       if (pendingPhotos.length) {
         saveBtn.textContent = "Uploading photos…";
-        let newPrimary = null;
-        for (const p of pendingPhotos) {
-          const up = await data.uploadPhoto(saved.id, p.file);
-          if (p.isPrimary) newPrimary = up;
-        }
-        // A staged photo marked default wins over any previously-saved default.
-        if (newPrimary) await data.setPrimaryPhoto(newPrimary);
+        for (const file of pendingPhotos) await data.uploadPhoto(saved.id, file);
       }
       toast("Queen saved 🐝");
       closeForm();
@@ -697,13 +450,29 @@
     const q = byId(id);
     if (!q) return;
     $("#detail-title").textContent = q.queen_code + (q.name ? " · " + q.name : "");
+
+    // QR button — only when this queen is assigned to a hive
+    const dqr = $("#detail-qr");
+    const hiveLabel = (q.current_hive || "").trim();
+    if (hiveLabel) {
+      dqr.classList.remove("hidden");
+      dqr.onclick = () => openQrModal(hiveLabel);
+    } else {
+      dqr.classList.add("hidden");
+      dqr.onclick = null;
+    }
+
+    // Voice-note button — available for any queen
+    const dvoice = $("#detail-voice");
+    dvoice.classList.remove("hidden");
+    dvoice.onclick = () => openVoiceModal(q.id, hiveLabel);
     const body = $("#detail-body");
     const mom = q.mother_queen_id ? byId(q.mother_queen_id) : null;
     const kids = QUEENS.filter((k) => k.mother_queen_id === q.id);
     const repl = q.replaced_by_id ? byId(q.replaced_by_id) : null;
 
     const row = (lbl, val) => (val || val === 0 ? `<div class="flex gap-2 py-1 border-b border-honey-50"><dt class="w-40 shrink-0 text-hive-800/50 text-sm">${lbl}</dt><dd class="text-sm">${val}</dd></div>` : "");
-    const rate = (lbl, v, max = 5) => (v ? `<div class="flex gap-2 py-1 border-b border-honey-50 items-center"><dt class="w-40 shrink-0 text-hive-800/50 text-sm">${lbl}</dt><dd>${ratingDots(v, max)} <span class="text-xs text-hive-800/50">${v}/${max}</span></dd></div>` : "");
+    const rate = (lbl, v) => (v ? `<div class="flex gap-2 py-1 border-b border-honey-50 items-center"><dt class="w-40 shrink-0 text-hive-800/50 text-sm">${lbl}</dt><dd>${ratingDots(v)} <span class="text-xs text-hive-800/50">${v}/5</span></dd></div>` : "");
 
     body.innerHTML = `
       <div id="detail-photos" class="flex flex-wrap gap-2 mb-4"></div>
@@ -723,8 +492,9 @@
         <dl>
           <div class="text-honey-700 font-semibold text-xs uppercase mt-1 mb-1">Hive &amp; performance</div>
           ${row("Current hive", esc(q.current_hive))}
-          ${row("Mated status", esc(q.mated_status || ""))}
+          ${row("Mated status", [esc(q.mated_status), q.mating_date].filter(Boolean).join(" · "))}
           ${rate("Laying pattern", q.laying_pattern)}
+          ${rate("Brood quality", q.brood_quality)}
           ${rate("Temperament", q.temperament)}
           ${rate("Honey production", q.honey_production)}
           <div class="text-honey-700 font-semibold text-xs uppercase mt-3 mb-1">Genetics</div>
@@ -732,7 +502,6 @@
           ${row("Marking", esc(q.marking_color))}
           ${rate("Hygienic behavior", q.hygienic_behavior)}
           ${rate("Mite resistance", q.mite_resistance)}
-          ${rate("Harbo assay", q.harbo_assay, 4)}
         </dl>
       </div>
       ${q.notable_traits ? `<div class="mt-3"><div class="text-honey-700 font-semibold text-xs uppercase mb-1">Notable traits</div><p class="text-sm whitespace-pre-wrap">${esc(q.notable_traits)}</p></div>` : ""}
@@ -763,7 +532,6 @@
     // photos
     const pbox = $("#detail-photos");
     const photos = await data.listPhotos(id);
-    photos.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0)); // default photo first
     if (!photos.length) pbox.innerHTML = `<div class="w-full h-40 bg-honey-100 rounded-xl flex items-center justify-center text-5xl">🐝</div>`;
     for (const p of photos) {
       const url = await data.photoUrl(p.storage_path);
@@ -866,6 +634,365 @@
         </div>`).join("") || "<p class='text-hive-800/50'>No data yet.</p>";
   }
 
+  // ================= HIVES & QR CODES =================
+  // Base URL the QR codes point at — works wherever the app is hosted (GitHub Pages, etc.)
+  function appBase() { return location.origin + location.pathname; }
+  function hiveUrl(label) { return appBase() + "?hive=" + encodeURIComponent(label); }
+
+  // Build an SVG QR code (crisp at any print size) for `text`, sized ~sizePx.
+  function qrSvg(text, sizePx) {
+    const qr = qrcode(0, "M");        // auto version, medium error-correction
+    qr.addData(text);
+    qr.make();
+    const count = qr.getModuleCount();
+    const margin = 4;                 // quiet zone (modules)
+    const cell = Math.max(2, Math.floor(sizePx / (count + margin * 2)));
+    return qr.createSvgTag({ cellSize: cell, margin });
+  }
+
+  // Group queens into hives by their `current_hive` label (case-insensitive).
+  function deriveHives() {
+    const map = new Map();
+    for (const q of QUEENS) {
+      const h = (q.current_hive || "").trim();
+      if (!h) continue;
+      const key = h.toLowerCase();
+      if (!map.has(key)) map.set(key, { label: h, queens: [] });
+      map.get(key).queens.push(q);
+    }
+    const byNewest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
+    const hives = [...map.values()].map(({ label, queens }) => {
+      const alive = queens.filter((q) => q.status === "alive").sort(byNewest);
+      const any = [...queens].sort(byNewest);
+      return { label, current: alive[0] || any[0], count: queens.length, aliveCount: alive.length };
+    });
+    hives.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }));
+    return hives;
+  }
+
+  // The queen a scanned hive should open: the alive one (most recent), else most recent ever.
+  function findHiveCurrentQueen(label) {
+    const key = (label || "").trim().toLowerCase();
+    const queens = QUEENS.filter((q) => (q.current_hive || "").trim().toLowerCase() === key);
+    if (!queens.length) return null;
+    const byNewest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
+    return queens.filter((q) => q.status === "alive").sort(byNewest)[0] || [...queens].sort(byNewest)[0];
+  }
+
+  function renderHives() {
+    const grid = $("#hives-grid");
+    const all = deriveHives();
+    $("#hives-empty").classList.toggle("hidden", all.length !== 0);
+    const term = ($("#hive-search").value || "").toLowerCase().trim();
+    const hives = term
+      ? all.filter((h) => (h.label + " " + (h.current ? h.current.queen_code + " " + (h.current.name || "") : "")).toLowerCase().includes(term))
+      : all;
+    grid.innerHTML = hives.map((h) => {
+      const q = h.current;
+      let svg = "";
+      try { svg = qrSvg(hiveUrl(h.label), 132); } catch (e) { svg = "<span class='text-xs text-red-500'>QR error</span>"; }
+      const sc = q ? (STATUS_COLORS[q.status] || "") : "";
+      return `
+      <div class="bg-white rounded-xl card-shadow p-4">
+        <div class="flex items-start gap-3">
+          <div class="shrink-0">${svg}</div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold text-honey-800">🏠 ${esc(h.label)}</div>
+            ${q
+              ? `<div class="text-sm text-hive-800/70 truncate">${esc(q.queen_code)}${q.name ? " · " + esc(q.name) : ""}</div>
+                 <div class="mt-1"><span class="text-xs px-2 py-0.5 rounded-full ${sc} capitalize">${esc(q.status || "")}</span></div>`
+              : `<div class="text-sm text-hive-800/40">No queen assigned</div>`}
+            <div class="text-xs text-hive-800/40 mt-1">${h.count} queen${h.count !== 1 ? "s" : ""} in history</div>
+          </div>
+        </div>
+        <div class="flex gap-2 mt-3">
+          <button class="hive-open flex-1 text-sm border border-honey-200 hover:bg-honey-50 rounded-lg py-1.5" data-hive="${esc(h.label)}">Open</button>
+          <button class="hive-qr flex-1 text-sm bg-honey-100 text-honey-700 hover:bg-honey-200 rounded-lg py-1.5" data-hive="${esc(h.label)}">▦ QR / Print</button>
+        </div>
+      </div>`;
+    }).join("");
+    $$(".hive-open", grid).forEach((b) => b.addEventListener("click", () => openHive(b.dataset.hive)));
+    $$(".hive-qr", grid).forEach((b) => b.addEventListener("click", () => openQrModal(b.dataset.hive)));
+  }
+
+  function openHive(label) {
+    const q = findHiveCurrentQueen(label);
+    if (!q) return toast(`No queen found in hive "${label}"`);
+    openDetail(q.id);
+  }
+
+  // ---- QR modal ----
+  let qrCurrentLabel = "";
+  function openQrModal(label) {
+    qrCurrentLabel = label;
+    const url = hiveUrl(label);
+    const q = findHiveCurrentQueen(label);
+    $("#qr-hive-label").textContent = label;
+    $("#qr-sub").textContent = q ? `Opens: ${q.queen_code}${q.name ? " · " + q.name : ""}` : "No queen assigned yet";
+    $("#qr-url").textContent = url;
+    let svg = "";
+    try { svg = qrSvg(url, 224); } catch (e) { svg = "<span class='text-red-500 text-sm'>Couldn't render QR</span>"; }
+    $("#qr-holder").innerHTML = svg;
+    $("#qr-modal").classList.remove("hidden");
+  }
+  $("#qr-close").addEventListener("click", () => $("#qr-modal").classList.add("hidden"));
+  $("#qr-modal").addEventListener("click", (e) => { if (e.target.id === "qr-modal") $("#qr-modal").classList.add("hidden"); });
+  $("#qr-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(hiveUrl(qrCurrentLabel)); toast("Link copied"); }
+    catch (e) { toast("Copy failed — long-press the link to copy"); }
+  });
+  $("#qr-print").addEventListener("click", () => printLabels([qrCurrentLabel]));
+
+  // ---- Printable label sheet ----
+  function printLabels(labels) {
+    const items = labels.map((l) => {
+      let svg = "";
+      try { svg = qrSvg(hiveUrl(l), 240); } catch (e) { svg = ""; }
+      return `<div class="label"><div class="qr">${svg}</div><div class="name">🏠 ${esc(l)}</div><div class="hint">Scan to open this hive</div></div>`;
+    }).join("");
+    const w = window.open("", "_blank");
+    if (!w) return toast("Allow pop-ups to print labels");
+    w.document.write(`<!doctype html><html><head><title>Hive QR labels</title><style>
+      *{box-sizing:border-box} body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:0;padding:16px;color:#2b220f}
+      .sheet{display:flex;flex-wrap:wrap;gap:16px}
+      .label{border:2px dashed #e0b96a;border-radius:12px;padding:14px;width:264px;text-align:center;page-break-inside:avoid}
+      .qr svg{width:220px;height:220px}
+      .name{font-size:24px;font-weight:800;margin-top:8px;color:#894b16}
+      .hint{font-size:12px;color:#999;margin-top:2px}
+      @media print{.label{border-color:#bbb}}
+    </style></head><body><div class="sheet">${items}</div>
+    <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
+    </body></html>`);
+    w.document.close();
+  }
+
+  $("#hive-search").addEventListener("input", renderHives);
+  $("#hives-print-all").addEventListener("click", () => {
+    const labels = deriveHives().map((h) => h.label);
+    if (!labels.length) return toast("No hives to print yet");
+    printLabels(labels);
+  });
+
+  // ---- Deep link: open a hive/queen from a scanned QR (?hive= / ?queen=) ----
+  function handleDeepLink() {
+    const params = new URLSearchParams(location.search);
+    const hive = params.get("hive");
+    const queen = params.get("queen");
+    if (!hive && !queen) return;
+    if (queen) {
+      const q = byId(queen);
+      if (q) openDetail(q.id); else toast("That queen link wasn't found");
+    } else if (hive) {
+      const q = findHiveCurrentQueen(hive);
+      if (q) { switchTab("queens"); openDetail(q.id); }
+      else { switchTab("hives"); toast(`No queen is assigned to hive "${hive}" yet`); }
+    }
+    // Tidy the URL so a refresh doesn't re-trigger and it looks clean
+    history.replaceState(null, "", appBase());
+  }
+
+  // ================= VOICE NOTES =================
+  let mediaRecorder = null, recChunks = [], recTimer = null, recSeconds = 0, recStream = null;
+  let voiceMeta = { queen_id: null, hive_label: null };
+
+  function fmtTime(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  function pickMime() {
+    const cands = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+    if (!window.MediaRecorder) return "";
+    for (const c of cands) { try { if (MediaRecorder.isTypeSupported(c)) return c; } catch (e) {} }
+    return "";
+  }
+  function setRecUI(recording) {
+    const b = $("#voice-record");
+    b.textContent = recording ? "■" : "●";
+    b.classList.toggle("animate-pulse", recording);
+  }
+
+  function openVoiceModal(queenId, hiveLabel) {
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      return toast("This browser can't record audio. Try Chrome or Safari on your phone.", 4000);
+    }
+    voiceMeta = { queen_id: queenId, hive_label: hiveLabel || null };
+    const q = queenId ? byId(queenId) : null;
+    $("#voice-hive").textContent = hiveLabel || (q ? q.queen_code : "");
+    $("#voice-status").textContent = "Tap the red button and describe the hive out loud.";
+    $("#voice-timer").textContent = "0:00";
+    $("#voice-record").disabled = false;
+    setRecUI(false);
+    $("#voice-modal").classList.remove("hidden");
+  }
+  function closeVoiceModal() {
+    if (mediaRecorder && mediaRecorder.state === "recording") stopRecording();
+    $("#voice-modal").classList.add("hidden");
+  }
+
+  $("#voice-close").addEventListener("click", closeVoiceModal);
+  $("#voice-modal").addEventListener("click", (e) => { if (e.target.id === "voice-modal") closeVoiceModal(); });
+
+  $("#voice-record").addEventListener("click", async () => {
+    if (mediaRecorder && mediaRecorder.state === "recording") { stopRecording(); return; }
+    await startRecording();
+  });
+
+  async function startRecording() {
+    try {
+      recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      $("#voice-status").textContent = "Microphone permission was blocked — enable it and try again.";
+      return;
+    }
+    const mime = pickMime();
+    recChunks = [];
+    try {
+      mediaRecorder = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+    } catch (e) {
+      mediaRecorder = new MediaRecorder(recStream);
+    }
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+    mediaRecorder.onstop = onRecordingStop;
+    mediaRecorder.start();
+    recSeconds = 0; $("#voice-timer").textContent = "0:00";
+    recTimer = setInterval(() => { recSeconds++; $("#voice-timer").textContent = fmtTime(recSeconds); }, 1000);
+    setRecUI(true);
+    $("#voice-status").textContent = "Recording… tap again to stop.";
+  }
+
+  function stopRecording() {
+    try { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch (e) {}
+    clearInterval(recTimer);
+    if (recStream) recStream.getTracks().forEach((t) => t.stop());
+    setRecUI(false);
+  }
+
+  async function onRecordingStop() {
+    const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
+    const blob = new Blob(recChunks, { type });
+    if (!blob.size) { $("#voice-status").textContent = "Didn't catch anything — try again."; return; }
+    $("#voice-status").textContent = "Uploading & transcribing… this can take a few seconds.";
+    $("#voice-record").disabled = true;
+    try {
+      const ext = type.includes("mp4") ? "mp4" : type.includes("ogg") ? "ogg" : "webm";
+      const audio_path = await data.uploadAudio(voiceMeta.queen_id, voiceMeta.hive_label, blob, ext);
+      const res = await data.transcribeVoice({ audio_path, queen_id: voiceMeta.queen_id, hive_label: voiceMeta.hive_label });
+      $("#voice-modal").classList.add("hidden");
+      openReviewCard(res.parsed || {}, res.transcript || "", { ...voiceMeta, audio_path });
+    } catch (e) {
+      $("#voice-status").textContent = "Failed: " + (e.message || e);
+      $("#voice-record").disabled = false;
+    }
+  }
+
+  // ---- Review & confirm card ----
+  const REVIEW_FIELDS = {
+    inspection: [
+      ["inspection_date", "Date", "date"], ["queen_seen", "Queen seen", "bool"], ["eggs_seen", "Eggs seen", "bool"],
+      ["brood_pattern", "Brood pattern (1-5)", "num"], ["temperament", "Temperament (1-5)", "num"],
+      ["population", "Population", "text"], ["stores", "Stores", "text"], ["space", "Space", "text"],
+      ["queen_cells", "Queen cells", "bool"], ["swarm_signs", "Swarm signs", "bool"],
+      ["mites", "Mites", "text"], ["pests_disease", "Pests / disease", "text"],
+      ["actions", "Actions taken", "text"], ["notes", "Notes", "text"],
+    ],
+    treatment: [
+      ["treatment_date", "Date", "date"], ["product", "Product", "text"], ["target", "Target", "text"],
+      ["dose", "Dose", "text"], ["method", "Method", "text"], ["notes", "Notes", "text"],
+    ],
+    feeding: [
+      ["feed_date", "Date", "date"], ["feed_type", "Feed type", "text"], ["amount", "Amount", "text"], ["notes", "Notes", "text"],
+    ],
+  };
+  const DATE_KEY = { inspection: "inspection_date", treatment: "treatment_date", feeding: "feed_date" };
+  let reviewState = { kind: "inspection", meta: {}, transcript: "", parsed: {} };
+
+  function openReviewCard(parsed, transcript, meta) {
+    const kind = (parsed.category === "treatment" || parsed.category === "feeding") ? parsed.category : "inspection";
+    reviewState = { kind, meta, transcript, parsed: parsed || {} };
+    renderReviewCard();
+    $("#review-modal").classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+  }
+  function closeReview() { $("#review-modal").classList.add("hidden"); document.body.style.overflow = ""; }
+  $("#review-close").addEventListener("click", closeReview);
+  $("#review-modal").addEventListener("click", (e) => { if (e.target.id === "review-modal") closeReview(); });
+
+  function renderReviewCard() {
+    const kind = reviewState.kind;
+    const dateKey = DATE_KEY[kind];
+    const today = new Date().toISOString().slice(0, 10);
+    const sub = reviewState.parsed[kind] || {};
+    const meta = reviewState.meta;
+    const q = meta.queen_id ? byId(meta.queen_id) : null;
+    const catBtn = (k, lbl) => `<button data-cat="${k}" class="px-3 py-1.5 rounded-lg text-sm font-medium ${kind === k ? "bg-honey-500 text-white" : "bg-honey-100 text-honey-700"}">${lbl}</button>`;
+    const fieldHtml = REVIEW_FIELDS[kind].map(([key, lbl, type]) => {
+      const val = key === dateKey ? (sub[dateKey] || today) : sub[key];
+      if (type === "bool") {
+        const v = val === true ? "yes" : val === false ? "no" : "";
+        return `<label class="block"><span class="lbl">${lbl}</span>
+          <select class="inp" data-f="${key}" data-t="bool">
+            <option value="" ${v === "" ? "selected" : ""}>—</option>
+            <option value="yes" ${v === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${v === "no" ? "selected" : ""}>No</option>
+          </select></label>`;
+      }
+      const inputType = type === "date" ? "date" : type === "num" ? "number" : "text";
+      const minmax = type === "num" ? 'min="1" max="5"' : "";
+      return `<label class="block"><span class="lbl">${lbl}</span>
+        <input class="inp" data-f="${key}" data-t="${type}" type="${inputType}" ${minmax} value="${val == null ? "" : esc(String(val))}" /></label>`;
+    }).join("");
+    $("#review-body").innerHTML = `
+      <div class="flex gap-2 mb-4">${catBtn("inspection", "🔍 Inspection")}${catBtn("treatment", "💊 Treatment")}${catBtn("feeding", "🍯 Feeding")}</div>
+      <p class="text-xs text-hive-800/50 mb-3">${q ? `Hive <b>${esc(meta.hive_label || "—")}</b> · ${esc(q.queen_code)}` : esc(meta.hive_label || "")} — AI-filled from your voice note. Edit anything before saving.</p>
+      <div class="grid sm:grid-cols-2 gap-3">${fieldHtml}</div>
+      <div class="mt-4">
+        <div class="text-honey-700 font-semibold text-xs uppercase mb-1">What you said</div>
+        <p class="text-sm text-hive-800/70 bg-honey-50 rounded-lg p-2 whitespace-pre-wrap">${esc(reviewState.transcript || "(no transcript)")}</p>
+      </div>
+      <div class="flex gap-2 justify-end mt-5 pt-3 border-t border-honey-100">
+        <button id="review-discard" class="rounded-lg px-4 py-2 border border-honey-200 hover:bg-honey-50">Discard</button>
+        <button id="review-save" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-5 py-2 capitalize">Save ${kind}</button>
+      </div>`;
+    $$("#review-body [data-cat]").forEach((b) => b.addEventListener("click", () => {
+      captureReviewEdits();
+      reviewState.kind = b.dataset.cat;
+      renderReviewCard();
+    }));
+    $("#review-discard").addEventListener("click", closeReview);
+    $("#review-save").addEventListener("click", saveReview);
+  }
+
+  function captureReviewEdits() {
+    const sub = (reviewState.parsed[reviewState.kind] = reviewState.parsed[reviewState.kind] || {});
+    $$("#review-body [data-f]").forEach((el) => {
+      const k = el.dataset.f, t = el.dataset.t, v = el.value;
+      if (t === "bool") sub[k] = v === "" ? null : v === "yes";
+      else if (t === "num") sub[k] = v === "" ? null : parseInt(v, 10);
+      else sub[k] = v === "" ? null : v;
+    });
+  }
+
+  async function saveReview() {
+    captureReviewEdits();
+    const btn = $("#review-save");
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const kind = reviewState.kind;
+      const dateKey = DATE_KEY[kind];
+      const row = { ...(reviewState.parsed[kind] || {}) };
+      if (!row[dateKey]) row[dateKey] = new Date().toISOString().slice(0, 10);
+      if (reviewState.parsed.summary && !row.summary) row.summary = reviewState.parsed.summary;
+      await data.saveVoiceRecord(kind, row, {
+        queen_id: reviewState.meta.queen_id, hive_label: reviewState.meta.hive_label,
+        transcript: reviewState.transcript, audio_path: reviewState.meta.audio_path,
+      });
+      toast("Saved " + kind + " 🐝");
+      closeReview();
+      if (detailId) await renderEvents(detailId);
+    } catch (e) {
+      toast("Save failed: " + (e.message || e), 4000);
+    } finally {
+      btn.disabled = false; btn.textContent = "Save " + reviewState.kind;
+    }
+  }
+
   // ================= EXPORT =================
   function download(name, content, type) {
     const blob = new Blob([content], { type });
@@ -891,5 +1018,10 @@
 
   // close modals on backdrop click / escape
   [formModal, detailModal].forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) { m.classList.add("hidden"); document.body.style.overflow = ""; } }));
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { formModal.classList.add("hidden"); detailModal.classList.add("hidden"); document.body.style.overflow = ""; } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      ["#form-modal", "#detail-modal", "#qr-modal", "#voice-modal", "#review-modal"].forEach((s) => $(s).classList.add("hidden"));
+      document.body.style.overflow = "";
+    }
+  });
 })();
