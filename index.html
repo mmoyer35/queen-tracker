@@ -101,6 +101,20 @@
         <button id="auth-submit" type="submit"
                 class="w-full bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg py-2.5 transition disabled:opacity-60 disabled:cursor-not-allowed">Sign in</button>
       </form>
+      <!-- Quick unlock: only shown when a passkey is enrolled on this device -->
+      <div id="auth-bio-wrap" class="hidden mt-3">
+        <div class="flex items-center gap-3 my-1">
+          <span class="h-px bg-honey-100 flex-1"></span>
+          <span class="text-xs text-hive-800/40">or</span>
+          <span class="h-px bg-honey-100 flex-1"></span>
+        </div>
+        <button id="auth-bio" type="button"
+                class="w-full border-2 border-honey-300 hover:bg-honey-50 text-honey-800 font-semibold rounded-lg py-2.5 transition flex items-center justify-center gap-2 disabled:opacity-60">
+          <span class="text-lg">🔐</span><span id="auth-bio-label">Unlock with Face ID</span>
+        </button>
+        <p id="auth-bio-hint" class="text-xs text-hive-800/45 mt-1.5 text-center"></p>
+      </div>
+
       <p id="auth-msg" class="text-sm mt-3 text-center min-h-[1.25rem]"></p>
       <div class="text-center mt-2">
         <button id="auth-toggle" class="text-sm text-honey-700 underline">New here? Create an account</button>
@@ -121,14 +135,27 @@
             <button id="btn-menu" class="rounded-full bg-white/20 hover:bg-white/30 w-9 h-9 flex items-center justify-center">☰</button>
             <div id="menu" class="hidden absolute right-0 mt-2 w-56 bg-white text-hive-900 rounded-lg card-shadow py-1 text-sm">
               <div id="menu-email" class="px-4 py-2 text-xs text-hive-800/50 border-b border-honey-100 truncate"></div>
-              <button id="menu-export" class="w-full text-left px-4 py-2 hover:bg-honey-50">⬇︎ Export data (JSON)</button>
-              <button id="menu-export-csv" class="w-full text-left px-4 py-2 hover:bg-honey-50">⬇︎ Export queens (CSV)</button>
+              <button id="menu-share" class="w-full text-left px-4 py-2 hover:bg-honey-50">👥 Sharing &amp; apiaries…</button>
+              <button id="menu-export" class="w-full text-left px-4 py-2 hover:bg-honey-50">⬇︎ Export data…</button>
               <button id="menu-import" class="w-full text-left px-4 py-2 hover:bg-honey-50">⬆︎ Import data (JSON/CSV)</button>
+              <button id="menu-bio" class="hidden w-full text-left px-4 py-2 hover:bg-honey-50">🔐 Quick unlock</button>
               <button id="menu-signout" class="w-full text-left px-4 py-2 hover:bg-honey-50 text-red-600 border-t border-honey-100">Sign out</button>
             </div>
           </div>
         </div>
       </div>
+      <!-- Apiary switcher — only appears once you have more than one apiary -->
+      <div id="apiary-bar" class="hidden max-w-6xl mx-auto px-4 pb-2 -mt-1 flex items-center gap-2">
+        <span class="text-xs text-white/70 shrink-0">Viewing</span>
+        <div class="relative">
+          <button id="btn-apiary" class="flex items-center gap-1 rounded-lg bg-white/20 hover:bg-white/30 px-2.5 py-1 text-sm font-semibold max-w-[55vw]">
+            <span id="apiary-label" class="truncate"></span><span class="opacity-70 text-xs">▾</span>
+          </button>
+          <div id="apiary-menu" class="hidden absolute left-0 mt-2 w-72 bg-white text-hive-900 rounded-lg card-shadow py-1 text-sm z-30"></div>
+        </div>
+        <span id="apiary-role" class="hidden text-[11px] rounded-full bg-white/25 px-2 py-0.5 shrink-0"></span>
+      </div>
+
       <!-- Tabs -->
       <nav class="max-w-6xl mx-auto px-2 flex gap-1 text-sm">
         <button data-tab="queens"  class="tab-btn px-4 py-2 font-medium border-b-2 border-transparent">Queens</button>
@@ -139,6 +166,17 @@
     </header>
 
     <main class="max-w-6xl mx-auto px-4 py-5">
+
+      <!-- Someone invited you: shown until you accept or decline -->
+      <div id="invite-bar" class="hidden mb-4 space-y-2"></div>
+
+      <!-- Offer / repair quick unlock (shown only when it's actually useful) -->
+      <div id="bio-bar" class="hidden mb-4 rounded-xl border border-honey-200 bg-honey-50 px-4 py-3 flex flex-wrap items-center gap-3">
+        <span class="text-xl">🔐</span>
+        <p id="bio-bar-text" class="text-sm text-hive-800/80 flex-1 min-w-[12rem]"></p>
+        <button id="bio-bar-go" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-4 py-1.5 text-sm">Turn on</button>
+        <button id="bio-bar-dismiss" class="text-sm text-hive-800/50 hover:text-hive-800 px-2">Not now</button>
+      </div>
 
       <!-- ---------- QUEENS TAB ---------- -->
       <section id="tab-queens">
@@ -171,10 +209,11 @@
           <input id="hive-search" placeholder="🔎 Search hives…"
                  class="flex-1 min-w-[200px] border border-honey-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-honey-400" />
           <select id="hives-print-size" title="Label size" class="border border-honey-200 rounded-lg px-2 py-2 text-sm">
-            <option value="small">Small (fit more)</option>
-            <option value="medium" selected>Medium</option>
-            <option value="large">Large (fit fewer)</option>
+            <option value="small">Small — 1.5 in</option>
+            <option value="medium" selected>Medium — 2.5 in</option>
+            <option value="large">Large — 3.75 in</option>
           </select>
+          <button id="hives-scan" class="bg-hive-900 hover:bg-hive-800 text-white font-semibold rounded-lg px-3 py-2 text-sm">📷 Scan a tag</button>
           <button id="hives-print-all" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-3 py-2 text-sm">🖨️ Print all labels</button>
         </div>
         <p class="text-sm text-hive-800/60 mb-3">Each hive gets a QR code. Print it, stick it on the box, and scanning it opens that hive's current queen. Hives are read from the <b>Current hive / colony</b> field on your queens.</p>
@@ -192,7 +231,8 @@
             <button id="lin-view-tree" class="px-4 py-2 text-sm font-medium bg-honey-500 text-white">Tree</button>
             <button id="lin-view-list" class="px-4 py-2 text-sm font-medium bg-white text-honey-700">List</button>
           </div>
-          <p class="text-sm text-hive-800/60 ml-2">Lines connect each queen to her mother. Click a card for details.</p>
+          <button id="lin-fit" class="px-3 py-2 text-sm font-medium rounded-lg border border-honey-300 bg-white text-honey-700">Fit width</button>
+          <p class="text-sm text-hive-800/60 ml-2">Each family gets its own column. Lines connect each queen to her mother — click a card for details.</p>
         </div>
         <div id="lineage-tree" class="overflow-auto border border-honey-100 rounded-xl bg-white card-shadow p-4" style="min-height:300px"></div>
         <div id="lineage-list" class="hidden bg-white card-shadow rounded-xl p-4"></div>
@@ -341,9 +381,9 @@
       <div class="flex items-center gap-2 mt-3 text-sm">
         <label for="qr-print-size" class="text-hive-800/60 shrink-0">Print size</label>
         <select id="qr-print-size" class="flex-1 border border-honey-200 rounded-lg px-2 py-1.5">
-          <option value="small">Small</option>
-          <option value="medium" selected>Medium</option>
-          <option value="large">Large</option>
+          <option value="small">Small — 1.5 in</option>
+          <option value="medium" selected>Medium — 2.5 in</option>
+          <option value="large">Large — 3.75 in</option>
         </select>
       </div>
       <div class="flex gap-2 mt-3">
@@ -380,6 +420,45 @@
     </div>
   </div>
 
+  <!-- ================= EXPORT MODAL ================= -->
+  <div id="export-modal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto">
+    <div class="bg-white rounded-2xl card-shadow max-w-lg w-full my-8">
+      <div class="flex items-center gap-2 p-5 pb-0">
+        <h2 class="font-bold text-honey-800 text-lg">⬇︎ Export data</h2>
+        <button id="export-close" class="ml-auto text-2xl leading-none text-hive-800/50 hover:text-hive-900">&times;</button>
+      </div>
+      <div id="export-body" class="p-5"></div>
+    </div>
+  </div>
+
+  <!-- ================= SHARING MODAL ================= -->
+  <div id="share-modal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto">
+    <div class="bg-white rounded-2xl card-shadow max-w-lg w-full my-8">
+      <div class="flex items-center gap-2 p-5 pb-0">
+        <h2 class="font-bold text-honey-800 text-lg">👥 Sharing &amp; apiaries</h2>
+        <button id="share-close" class="ml-auto text-2xl leading-none text-hive-800/50 hover:text-hive-900">&times;</button>
+      </div>
+      <div id="share-body" class="p-5"></div>
+    </div>
+  </div>
+
+  <!-- QR scanner: full-screen camera with a cut-out aiming frame -->
+  <div id="scan-modal" class="hidden fixed inset-0 z-50 bg-black">
+    <video id="scan-video" class="absolute inset-0 w-full h-full object-cover" playsinline muted autoplay></video>
+    <div class="absolute inset-0 grid place-items-center pointer-events-none">
+      <div id="scan-frame" class="w-64 h-64 max-w-[72vw] max-h-[72vw] rounded-2xl border-4 border-white/85"></div>
+    </div>
+    <div class="absolute top-0 inset-x-0 p-4 flex items-center gap-2">
+      <button id="scan-close" class="bg-black/60 text-white rounded-lg px-3 py-2 text-sm font-semibold">&times; Close</button>
+      <button id="scan-flip" class="ml-auto bg-black/60 text-white rounded-lg px-3 py-2 text-sm">🔄 Flip</button>
+      <button id="scan-torch" class="hidden bg-black/60 text-white rounded-lg px-3 py-2 text-sm">🔦 Light off</button>
+    </div>
+    <div class="absolute bottom-0 inset-x-0 p-5 text-center space-y-3">
+      <p id="scan-hint" class="text-sm px-3 py-2 rounded-lg inline-block bg-black/60 text-white">Point the camera at a hive tag</p>
+      <div><button id="scan-manual" class="text-white/80 underline text-sm">Type a hive name instead</button></div>
+    </div>
+  </div>
+
   <!-- Hidden file input for Import -->
   <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" class="hidden" />
 
@@ -391,14 +470,27 @@
     .lbl { display:block; font-size:.8rem; font-weight:600; color:#894b16; margin-bottom:.2rem; }
     .inp { width:100%; border:1px solid #fbe3ad; border-radius:.5rem; padding:.5rem .6rem; outline:none; background:#fffdf9; }
     .inp:focus { box-shadow:0 0 0 2px #f4b43f; }
+    /* Queen-card photo: blurred fill behind, whole photo in front. */
+    .thumb { position:relative; overflow:hidden; }
+    .thumb-blur, .thumb-img { position:absolute; inset:0; background-repeat:no-repeat; background-position:center; }
+    .thumb-blur { background-size:cover; filter:blur(18px) saturate(1.25); transform:scale(1.2); opacity:.75; }
+    .thumb-img { background-size:contain; }
     .tab-btn.active { border-color:white; color:white; }
     .tab-btn:not(.active){ color:#fdf1d6; }
+    /* Scanner: dim everything outside the aiming frame, flash green on a hit. */
+    #scan-frame { box-shadow: 0 0 0 9999px rgba(0,0,0,.45); transition: border-color .12s, box-shadow .12s; }
+    #scan-frame.scan-hit { border-color:#4ade80; box-shadow: 0 0 0 9999px rgba(0,0,0,.45), 0 0 24px 6px rgba(74,222,128,.7); }
   </style>
 
   <script src="js/vendor/qrcode-generator.js"></script>
+  <script src="js/vendor/jsqr.js"></script>
   <script src="js/config.js"></script>
+  <script src="js/biometric.js"></script>
   <script src="js/supabaseClient.js"></script>
+  <script src="js/apiaries.js"></script>
   <script src="js/lineage.js"></script>
+  <script src="js/export.js"></script>
+  <script src="js/scanner.js"></script>
   <script src="js/app.js"></script>
 
   <!-- Register the service worker so the app installs & works offline -->

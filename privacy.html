@@ -42,12 +42,14 @@
   Every record is protected by row-level security, meaning you can only ever read or write your
   own data. Photos and audio are kept in private storage buckets scoped to your account.</p>
 
-  <h2>Voice transcription (OpenAI)</h2>
-  <p>When you record a voice note, the audio is sent to <strong>OpenAI</strong> to transcribe it
-  (speech-to-text) and to structure it into an inspection, treatment, or feeding. Only that audio
-  and its transcript are sent; no account or identity information is included. OpenAI processes it
-  to return the result and does not use API data to train its models. See
-  <a href="https://openai.com/policies/privacy-policy" target="_blank" rel="noopener">OpenAI's privacy policy</a>.</p>
+  <h2>Voice transcription</h2>
+  <p>When you record a voice note, the audio is sent to a speech-to-text provider to transcribe it
+  and then to structure it into an inspection, treatment, or feeding. We currently use
+  <strong>Groq</strong>, with <strong>OpenAI</strong> as a fallback. Only that audio and its
+  transcript are sent; no account or identity information is included. Both providers process API
+  data to return the result and do not use it to train their models. See
+  <a href="https://groq.com/privacy-policy/" target="_blank" rel="noopener">Groq's privacy policy</a>
+  and <a href="https://openai.com/policies/privacy-policy" target="_blank" rel="noopener">OpenAI's privacy policy</a>.</p>
 
   <h2>Device permissions</h2>
   <ul>

@@ -52,7 +52,9 @@ Paste these keys inside the top-level `<dict>` (exact user-facing strings — Ap
 ```
 Note: Capacitor 6's WKWebView supports `getUserMedia` for mic + camera as long as the two
 usage strings above are present. `capacitor.config.json` already sets
-`limitsNavigationsToAppBoundDomains: false` so the web-view can reach the Supabase API and OpenAI.
+`limitsNavigationsToAppBoundDomains: false` so the web-view can reach the Supabase API. Voice
+transcription is called from a Supabase Edge Function, not the web-view, so the provider
+(Groq, with OpenAI as fallback) never needs to be reachable from the device directly.
 
 ### Android — add to `android/app/src/main/AndroidManifest.xml`
 Add these inside `<manifest>`, above the `<application>` tag:

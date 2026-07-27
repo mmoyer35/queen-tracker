@@ -1,6 +1,6 @@
 // Queen Tracker service worker — offline app shell + CDN caching.
 // Bump CACHE when you change any precached file to force an update.
-const CACHE = "qt-cache-v1";
+const CACHE = "qt-cache-v6";
 
 // Paths are relative to the SW scope, so this works under /queen-tracker/ on
 // GitHub Pages and at the root inside the native app.
@@ -10,10 +10,15 @@ const APP_SHELL = [
   "privacy.html",
   "manifest.webmanifest",
   "js/config.js",
+  "js/biometric.js",
   "js/supabaseClient.js",
+  "js/apiaries.js",
   "js/lineage.js",
+  "js/export.js",
+  "js/scanner.js",
   "js/app.js",
   "js/vendor/qrcode-generator.js",
+  "js/vendor/jsqr.js",
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/apple-touch-icon.png",
@@ -45,9 +50,9 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(req.url);
 
-  // NEVER intercept Supabase or OpenAI — auth, data, audio, and transcription
-  // must always be live and are user-specific.
-  if (url.hostname.endsWith("supabase.co") || url.hostname.endsWith("openai.com")) return;
+  // NEVER intercept Supabase or a transcription provider — auth, data, audio
+  // and transcription must always be live and are user-specific.
+  if (url.hostname.endsWith("supabase.co") || url.hostname.endsWith("openai.com") || url.hostname.endsWith("groq.com")) return;
 
   // App navigations (including deep links like ?hive=S-1): serve the cached
   // shell when offline so the app still boots.

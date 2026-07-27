@@ -15,8 +15,22 @@
 
   const { auth, data } = window.QT;
 
+  // The apiary module needs a live Supabase client. When it isn't there (the
+  // mocked test harness, or a stale cached copy of the app) fall back to a stub
+  // that behaves like one apiary you own — i.e. exactly how the app worked
+  // before sharing existed.
+  const sharingLive = !!window.QT.apiaries;
+  const APIARIES = window.QT.apiaries || {
+    all: () => [], current: () => null, currentId: () => null, label: () => "",
+    isOwner: () => true, canWrite: () => true, readOnly: () => false,
+    onChange: () => () => {}, refresh: async () => [], reset() {}, switchTo: () => false,
+    myInvites: async () => [],
+  };
+
   // Local cache of queens for fast rendering / lineage / dropdowns
   let QUEENS = [];
+  let MITE = {};   // queen_id -> most recent mite wash
+  let TREAT = {};  // queen_id -> most recent treatment
   let RATING_FIELDS = ["laying_pattern", "brood_quality", "temperament", "honey_production", "hygienic_behavior", "mite_resistance"];
   let pendingPhotos = []; // File[] staged in the form
 
@@ -31,6 +45,21 @@
   const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
   const byId = (id) => QUEENS.find((q) => q.id === id);
   const label = (q) => (q ? esc(q.queen_code) + (q.name ? " · " + esc(q.name) : "") : "");
+
+  // "2026-07-14" -> "7/14/26". Parsed as plain Y-M-D so it never shifts a day
+  // across time zones the way new Date("2026-07-14") does.
+  function fmtDate(d) {
+    if (!d) return "";
+    const m = String(d).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return String(d);
+    return `${+m[2]}/${+m[3]}/${m[1].slice(2)}`;
+  }
+  // Days since a Y-M-D date (null if unparseable).
+  function daysSince(d) {
+    const m = String(d || "").slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    return Math.floor((Date.now() - Date.UTC(+m[1], +m[2] - 1, +m[3])) / 86400000);
+  }
 
   const STATUS_COLORS = {
     alive: "bg-green-100 text-green-700", dead: "bg-gray-200 text-gray-600",
@@ -121,14 +150,147 @@
     }
   });
 
-  auth.onChange(async (session) => {
+  // ================= QUICK UNLOCK (Face ID / Touch ID / fingerprint) =======
+  // On a phone the session dies with the app (see supabaseClient.js). This is
+  // the pleasant way back in: the refresh token is sealed behind the device's
+  // own biometric check, so getting back to your hives is one tap.
+  const BIO = window.QT_BIO || null;
+  let bioAvailable = false;
+  let bioDismissed = false;  // "Not now" — for this run of the app only
+
+  function bioError(err) {
+    const name = (err && err.name) || "";
+    if (name === "NotAllowedError") return "Unlock cancelled or timed out.";
+    if (name === "InvalidStateError") return "That passkey is already registered on this device.";
+    if (name === "SecurityError") return "Quick unlock needs the app to be served over https.";
+    return (err && err.message) || "Quick unlock failed.";
+  }
+
+  function paintBioLogin() {
+    const wrap = $("#auth-bio-wrap");
+    if (!wrap) return;
+    const ready = bioAvailable && BIO.isReady();
+    wrap.classList.toggle("hidden", !ready);
+    if (!ready) return;
+    $("#auth-bio-label").textContent = "Unlock with " + BIO.label();
+    const who = BIO.enrolledEmail();
+    $("#auth-bio-hint").textContent = who ? who : "";
+  }
+
+  function paintBioMenu() {
+    const btn = $("#menu-bio");
+    if (!btn) return;
+    btn.classList.toggle("hidden", !bioAvailable);
+    btn.textContent = BIO && BIO.isEnrolled()
+      ? "🔐 Quick unlock is on — turn off"
+      : "🔐 Turn on quick unlock";
+  }
+
+  function paintBioBar() {
+    const bar = $("#bio-bar");
+    if (!bar) return;
+    const hide = () => bar.classList.add("hidden");
+    if (!bioAvailable || bioDismissed) return hide();
+
+    const rearm = BIO.needsRearm();
+    const fresh = !BIO.isEnrolled();
+    // Nagging a desktop that stays signed in anyway is just noise.
+    if (fresh && !window.QT.ephemeralSession) return hide();
+    if (!rearm && !fresh) return hide();
+
+    $("#bio-bar-text").textContent = rearm
+      ? `Quick unlock needs re-arming after a password sign-in — one tap and ${BIO.label()} works again.`
+      : `This app signs you out when you close it. Turn on ${BIO.label()} to get back in with a tap.`;
+    $("#bio-bar-go").textContent = rearm ? "Re-arm" : "Turn on";
+    bar.classList.remove("hidden");
+  }
+
+  function paintBio() { paintBioLogin(); paintBioMenu(); paintBioBar(); }
+
+  // Enrol (or re-seal) using the live session. Must run from a click — Safari
+  // won't hand out a WebAuthn assertion without a user gesture.
+  async function armBio() {
+    const session = await auth.getSession();
+    if (!session) return toast("Sign in first, then turn on quick unlock");
+    try {
+      const res = BIO.needsRearm() ? await BIO.rearm(session) : await BIO.enable(session);
+      toast(res.prf ? `${res.label} unlock is on` : `${res.label} unlock is on (device-protected)`);
+    } catch (err) {
+      toast(bioError(err), 3200);
+    }
+    paintBio();
+  }
+
+  async function doBioUnlock() {
+    const btn = $("#auth-bio"), msg = $("#auth-msg");
+    btn.disabled = true;
+    msg.className = "text-sm mt-3 text-center text-hive-800/70";
+    msg.textContent = "Waiting for " + BIO.label() + "…";
+    try {
+      const token = await BIO.unlock();
+      const { data: res, error } = await auth.resume(token);
+      if (error) {
+        // The sealed token was rotated out or revoked — don't offer it again.
+        BIO.invalidate();
+        throw new Error("That saved sign-in expired. Use your password once, then re-arm quick unlock.");
+      }
+      msg.textContent = "";
+      if (res && res.session) await BIO.resealQuiet(res.session);
+    } catch (err) {
+      msg.className = "text-sm mt-3 text-center text-red-600";
+      msg.textContent = bioError(err);
+      paintBioLogin();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  (function wireBio() {
+    if (!BIO) return;
+    const unlockBtn = $("#auth-bio");
+    if (unlockBtn) unlockBtn.addEventListener("click", doBioUnlock);
+    const go = $("#bio-bar-go");
+    if (go) go.addEventListener("click", armBio);
+    const no = $("#bio-bar-dismiss");
+    if (no) no.addEventListener("click", () => { bioDismissed = true; paintBioBar(); });
+    const menuBtn = $("#menu-bio");
+    if (menuBtn) menuBtn.addEventListener("click", async () => {
+      if (BIO.isEnrolled()) {
+        BIO.disable();
+        toast("Quick unlock turned off");
+        paintBio();
+      } else {
+        await armBio();
+      }
+    });
+    BIO.available().then((ok) => { bioAvailable = ok; paintBio(); });
+  })();
+
+  let appStarted = false;
+
+  auth.onChange(async (session, event) => {
     if (session && session.user) {
       $("#auth-screen").classList.add("hidden");
       $("#menu-email").textContent = session.user.email;
-      await startApp();
+
+      // Refresh tokens rotate roughly hourly. Re-seal the stored copy so it
+      // never goes stale — and don't tear down and rebuild the whole UI for it.
+      if (event === "TOKEN_REFRESHED" && appStarted) {
+        if (BIO) { await BIO.resealQuiet(session); paintBioBar(); }
+        boot.classList.add("hidden");
+        return;
+      }
+
+      appStarted = true;
+      await startApp(session.user.id);
+      if (BIO) { await BIO.resealQuiet(session); paintBio(); }
     } else {
+      appStarted = false;
+      APIARIES.reset();
+      apiaryReady = false;
       $("#app").classList.add("hidden");
       $("#auth-screen").classList.remove("hidden");
+      paintBioLogin();
     }
     boot.classList.add("hidden");
   });
@@ -139,15 +301,22 @@
     if (!user) {
       boot.classList.add("hidden");
       $("#auth-screen").classList.remove("hidden");
+      paintBioLogin();
     }
   })();
 
   // ================= APP START =================
-  async function startApp() {
+  // Which apiary is live has to be settled *before* the first query goes out,
+  // because every query in supabaseClient.js is filtered to it.
+  async function startApp(uid) {
     $("#app").classList.remove("hidden");
+    try { await APIARIES.refresh(uid); } catch (e) { toast("Couldn't load apiaries: " + e.message); }
+    paintApiary();
     await refresh();
     switchTab("queens");
     handleDeepLink();
+    apiaryReady = true;      // from here on, switching apiaries reloads the data
+    checkInvites();
   }
 
   async function refresh() {
@@ -157,6 +326,10 @@
       toast("Load error: " + e.message);
       QUEENS = [];
     }
+    // Card summaries (mite wash / treatment). Non-fatal: if these tables
+    // aren't migrated yet the cards just omit those lines.
+    try { MITE = await data.latestMiteChecks(); } catch (e) { MITE = {}; }
+    try { TREAT = await data.latestTreatments(); } catch (e) { TREAT = {}; }
     buildYearFilter();
     renderQueens();
     if (currentTab === "hives") renderHives();
@@ -183,9 +356,299 @@
   $("#btn-menu").addEventListener("click", (e) => { e.stopPropagation(); $("#menu").classList.toggle("hidden"); });
   document.addEventListener("click", () => $("#menu").classList.add("hidden"));
   $("#menu").addEventListener("click", (e) => e.stopPropagation());
-  $("#menu-signout").addEventListener("click", () => auth.signOut());
-  $("#menu-export").addEventListener("click", exportJSON);
-  $("#menu-export-csv").addEventListener("click", exportCSV);
+  $("#menu-signout").addEventListener("click", () => {
+    // Signing out revokes the refresh token server-side, so the sealed copy is
+    // dead too. Keep the passkey enrolment (re-arming is one tap) but never
+    // hand that token to Supabase again.
+    if (BIO && BIO.isEnrolled()) BIO.invalidate();
+    auth.signOut();
+  });
+  $("#menu-export").addEventListener("click", openExport);
+  $("#menu-share").addEventListener("click", () => openShare());
+
+  // ================= APIARIES: SWITCHER, PERMISSIONS, SHARING =================
+  // The database is the authority here — every policy checks membership and
+  // role server-side. Everything below is only about not showing someone a
+  // button that would come back "permission denied".
+  let apiaryReady = false;
+
+  APIARIES.onChange(() => {
+    if (!apiaryReady) return;      // startApp() paints and loads once by itself
+    paintApiary();
+    refresh();
+  });
+
+  function paintApiary() {
+    const list = APIARIES.all();
+    const cur = APIARIES.current();
+    // One apiary is the normal case; the switcher would just be noise.
+    $("#apiary-bar").classList.toggle("hidden", list.length < 2);
+    $("#apiary-label").textContent = APIARIES.label(cur);
+
+    const badge = $("#apiary-role");
+    const role = (cur || {}).role;
+    badge.textContent = role === "view" ? "Read-only" : role === "edit" ? "Can edit" : "";
+    badge.classList.toggle("hidden", role !== "view" && role !== "edit");
+
+    applyPermissions();
+  }
+
+  // Hide what this role can't do. Owners do everything; "edit" can add and
+  // change but not delete a queen; "view" can only look.
+  function applyPermissions() {
+    const write = APIARIES.canWrite();
+    $("#btn-add").classList.toggle("hidden", !write);
+    $("#menu-import").classList.toggle("hidden", !write);
+    $("#detail-edit").classList.toggle("hidden", !write);
+    if (!write) $("#detail-voice").classList.add("hidden");
+  }
+
+  // ---- the switcher dropdown -------------------------------------------
+  const apiaryMenu = $("#apiary-menu");
+  $("#btn-apiary").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (apiaryMenu.classList.contains("hidden")) renderApiaryMenu();
+    apiaryMenu.classList.toggle("hidden");
+  });
+  apiaryMenu.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => apiaryMenu.classList.add("hidden"));
+
+  function renderApiaryMenu() {
+    const cur = APIARIES.currentId();
+    apiaryMenu.innerHTML =
+      APIARIES.all().map((a) => `
+        <button data-apiary="${esc(a.id)}" class="w-full text-left px-4 py-2 hover:bg-honey-50 flex items-center gap-2">
+          <span class="w-4 shrink-0 text-honey-600">${a.id === cur ? "✓" : ""}</span>
+          <span class="flex-1 truncate">${esc(APIARIES.label(a))}</span>
+          ${a.role === "view" ? '<span class="text-[10px] text-hive-800/40">view</span>' : ""}
+        </button>`).join("") +
+      `<div class="border-t border-honey-100 mt-1 pt-1">
+         <button id="apiary-manage" class="w-full text-left px-4 py-2 hover:bg-honey-50">👥 Sharing &amp; apiaries…</button>
+       </div>`;
+    $$("[data-apiary]", apiaryMenu).forEach((b) =>
+      b.addEventListener("click", () => { apiaryMenu.classList.add("hidden"); APIARIES.switchTo(b.dataset.apiary); }));
+    $("#apiary-manage", apiaryMenu).addEventListener("click", () => { apiaryMenu.classList.add("hidden"); openShare(); });
+  }
+
+  // ---- invites waiting for you -----------------------------------------
+  // No mail is sent; an invite simply shows up the next time you sign in.
+  async function checkInvites() {
+    if (!sharingLive) return;
+    const bar = $("#invite-bar");
+    let invites = [];
+    try { invites = (await APIARIES.myInvites()) || []; } catch (e) { return; }
+    if (!invites.length) { bar.classList.add("hidden"); bar.innerHTML = ""; return; }
+    bar.classList.remove("hidden");
+    bar.innerHTML = invites.map((i) => `
+      <div class="rounded-xl border border-honey-200 bg-honey-50 px-4 py-3 flex flex-wrap items-center gap-3">
+        <span class="text-xl">👥</span>
+        <p class="text-sm text-hive-800/80 flex-1 min-w-[12rem]">
+          <b>${esc(i.invited_by_email || "Someone")}</b> shared <b>${esc(i.apiary_name || "an apiary")}</b> with you
+          (${i.role === "edit" ? "you can add and edit" : "read-only"}).
+        </p>
+        <button data-accept="${esc(i.id)}" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-4 py-1.5 text-sm">Accept</button>
+        <button data-decline="${esc(i.id)}" class="text-sm text-hive-800/50 hover:text-hive-800 px-2">Decline</button>
+      </div>`).join("");
+    $$("[data-accept]", bar).forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { await APIARIES.acceptInvite(b.dataset.accept); toast("Joined"); } catch (e) { toast(e.message); b.disabled = false; return; }
+      checkInvites();
+    }));
+    $$("[data-decline]", bar).forEach((b) => b.addEventListener("click", async () => {
+      try { await APIARIES.declineInvite(b.dataset.decline); } catch (e) { toast(e.message); }
+      checkInvites();
+    }));
+  }
+
+  // ---- the Sharing screen ----------------------------------------------
+  const shareModal = $("#share-modal");
+  $("#share-close").addEventListener("click", closeShare);
+  shareModal.addEventListener("click", (e) => { if (e.target === shareModal) closeShare(); });
+  function closeShare() { shareModal.classList.add("hidden"); document.body.style.overflow = ""; }
+
+  async function openShare() {
+    $("#menu").classList.add("hidden");
+    if (!sharingLive) { toast("Sharing needs a reload — the app was updated."); return; }
+    shareModal.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+    await renderShare();
+  }
+
+  const ROLE_WORD = { owner: "Owner", edit: "Can add & edit", view: "Read-only" };
+
+  async function renderShare() {
+    const body = $("#share-body");
+    const cur = APIARIES.current();
+    if (!cur) { body.innerHTML = `<p class="text-sm text-hive-800/60">No apiary loaded.</p>`; return; }
+    const owner = cur.role === "owner";
+    body.innerHTML = `<p class="text-sm text-hive-800/50">Loading…</p>`;
+
+    let members = [], pending = [], codes = [];
+    try { members = (await APIARIES.members(cur.id)) || []; } catch (e) { /* shown below */ }
+    if (owner) {
+      try { pending = (await APIARIES.pendingInvites(cur.id)) || []; } catch (e) {}
+      try { codes = (await APIARIES.codes(cur.id)) || []; } catch (e) {}
+    }
+    const codeFor = (r) => (codes.find((c) => c.role === r) || {}).code || "";
+
+    body.innerHTML = `
+      <!-- which apiary -->
+      <div class="rounded-xl bg-honey-50 border border-honey-100 px-4 py-3 mb-4">
+        <div class="flex items-center gap-2">
+          <div class="font-semibold text-honey-800 flex-1 truncate">${esc(APIARIES.label(cur))}</div>
+          <span class="text-[11px] rounded-full bg-white px-2 py-0.5 text-hive-800/60">${ROLE_WORD[cur.role] || ""}</span>
+        </div>
+        ${owner && !cur.is_personal ? `
+          <div class="flex gap-2 mt-2">
+            <input id="sh-name" class="inp flex-1" value="${esc(cur.name)}" />
+            <button id="sh-rename" class="border border-honey-200 hover:bg-white rounded-lg px-3 text-sm">Rename</button>
+          </div>` : ""}
+      </div>
+
+      <!-- who can see it -->
+      <h3 class="text-honey-700 font-semibold text-xs uppercase tracking-wide mb-2">People</h3>
+      <ul class="space-y-1 text-sm mb-4">
+        ${members.map((m) => `
+          <li class="flex items-center gap-2 py-1 border-b border-honey-50">
+            <span class="flex-1 truncate">${esc(m.email || "someone")}${m.is_me ? ' <span class="text-hive-800/40">(you)</span>' : ""}</span>
+            ${owner && m.role !== "owner" ? `
+              <select data-role-for="${esc(m.user_id)}" class="border border-honey-200 rounded-lg px-1.5 py-1 text-xs">
+                <option value="view" ${m.role === "view" ? "selected" : ""}>Read-only</option>
+                <option value="edit" ${m.role === "edit" ? "selected" : ""}>Can add &amp; edit</option>
+              </select>
+              <button data-remove="${esc(m.user_id)}" class="text-red-500 text-xs hover:underline">remove</button>`
+            : `<span class="text-xs text-hive-800/40">${ROLE_WORD[m.role] || ""}</span>`}
+          </li>`).join("") || `<li class="text-hive-800/40">Just you.</li>`}
+      </ul>
+
+      ${owner ? `
+        ${pending.length ? `
+          <h3 class="text-honey-700 font-semibold text-xs uppercase tracking-wide mb-2">Invited, not joined yet</h3>
+          <ul class="space-y-1 text-sm mb-4">
+            ${pending.map((p) => `
+              <li class="flex items-center gap-2 py-1 border-b border-honey-50">
+                <span class="flex-1 truncate">${esc(p.email)}</span>
+                <span class="text-xs text-hive-800/40">${ROLE_WORD[p.role] || ""}</span>
+                <button data-revoke="${esc(p.id)}" class="text-red-500 text-xs hover:underline">revoke</button>
+              </li>`).join("")}
+          </ul>` : ""}
+
+        <h3 class="text-honey-700 font-semibold text-xs uppercase tracking-wide mb-2">Invite someone</h3>
+        <div class="flex flex-wrap gap-2 mb-1">
+          <input id="sh-email" type="email" class="inp flex-1 min-w-[10rem]" placeholder="their email" />
+          <select id="sh-invite-role" class="border border-honey-200 rounded-lg px-2 text-sm">
+            <option value="view">Read-only</option><option value="edit">Can add &amp; edit</option>
+          </select>
+          <button id="sh-invite" class="bg-honey-500 hover:bg-honey-600 text-white font-semibold rounded-lg px-4 py-2 text-sm">Invite</button>
+        </div>
+        <p class="text-xs text-hive-800/50 mb-4">No email is sent — the invite is waiting for them the next time they sign in. Or hand them the code below.</p>
+
+        <h3 class="text-honey-700 font-semibold text-xs uppercase tracking-wide mb-2">Share code</h3>
+        <div class="space-y-2 mb-4">
+          ${["view", "edit"].map((r) => `
+            <div class="flex items-center gap-2 text-sm">
+              <span class="w-24 shrink-0 text-hive-800/50 text-xs">${ROLE_WORD[r]}</span>
+              ${codeFor(r)
+                ? `<code class="font-mono font-bold text-honey-800 tracking-wider flex-1">${esc(codeFor(r))}</code>
+                   <button data-copy="${esc(codeFor(r))}" class="text-xs border border-honey-200 rounded-lg px-2 py-1 hover:bg-honey-50">Copy</button>
+                   <button data-rotate="${r}" class="text-xs border border-honey-200 rounded-lg px-2 py-1 hover:bg-honey-50">New code</button>
+                   <button data-revoke-code="${esc(codeFor(r))}" class="text-red-500 text-xs hover:underline">off</button>`
+                : `<span class="flex-1 text-hive-800/40 text-xs">none</span>
+                   <button data-mint="${r}" class="text-xs border border-honey-200 rounded-lg px-2 py-1 hover:bg-honey-50">Create</button>`}
+            </div>`).join("")}
+        </div>
+      ` : `<p class="text-xs text-hive-800/50 mb-4">Only the owner can invite people or change what anyone can do.</p>`}
+
+      <!-- joining / creating -->
+      <div class="border-t border-honey-100 pt-4 space-y-3">
+        <div>
+          <h3 class="text-honey-700 font-semibold text-xs uppercase tracking-wide mb-2">Join an apiary</h3>
+          <div class="flex gap-2">
+            <input id="sh-code" class="inp flex-1 font-mono uppercase" placeholder="HIVE-7K2Q" />
+            <button id="sh-join" class="border border-honey-200 hover:bg-honey-50 rounded-lg px-4 text-sm font-medium">Join</button>
+          </div>
+        </div>
+        <div>
+          <h3 class="text-honey-700 font-semibold text-xs uppercase tracking-wide mb-2">Start another apiary</h3>
+          <div class="flex gap-2">
+            <input id="sh-new" class="inp flex-1" placeholder="e.g. Back field yard" />
+            <button id="sh-create" class="border border-honey-200 hover:bg-honey-50 rounded-lg px-4 text-sm font-medium">Create</button>
+          </div>
+        </div>
+        ${cur.role !== "owner"
+          ? `<button id="sh-leave" class="text-sm text-red-600 hover:underline">Leave ${esc(APIARIES.label(cur))}</button>`
+          : (!cur.is_personal
+            ? `<button id="sh-delete" class="text-sm text-red-600 hover:underline">Delete this apiary and everything in it</button>`
+            : "")}
+      </div>`;
+
+    wireShare(cur);
+  }
+
+  // Every action re-reads from the server rather than patching the DOM: the
+  // panel is small, and a stale members list is exactly the thing you don't
+  // want when you're deciding who can touch your bees.
+  function wireShare(cur) {
+    const body = $("#share-body");
+    const go = async (fn, ok) => {
+      try { await fn(); if (ok) toast(ok); } catch (e) { toast(e.message); }
+      await renderShare();
+    };
+
+    const rn = $("#sh-rename", body);
+    if (rn) rn.addEventListener("click", () => {
+      const n = $("#sh-name", body).value.trim();
+      if (n) go(() => APIARIES.rename(cur.id, n), "Renamed");
+    });
+
+    $$("[data-role-for]", body).forEach((s) => s.addEventListener("change", () =>
+      go(() => APIARIES.setRole(cur.id, s.dataset.roleFor, s.value), "Updated")));
+    $$("[data-remove]", body).forEach((b) => b.addEventListener("click", () => {
+      if (confirm("Remove this person? They lose access immediately.")) go(() => APIARIES.removeMember(cur.id, b.dataset.remove), "Removed");
+    }));
+    $$("[data-revoke]", body).forEach((b) => b.addEventListener("click", () =>
+      go(() => APIARIES.revokeInvite(b.dataset.revoke), "Invite revoked")));
+
+    const inv = $("#sh-invite", body);
+    if (inv) inv.addEventListener("click", () => {
+      const em = $("#sh-email", body).value.trim();
+      if (!em) return toast("Enter their email");
+      go(() => APIARIES.invite(cur.id, em, $("#sh-invite-role", body).value), "Invited — they'll see it when they sign in");
+    });
+
+    $$("[data-mint]", body).forEach((b) => b.addEventListener("click", () =>
+      go(() => APIARIES.shareCode(cur.id, b.dataset.mint, false), "Code created")));
+    $$("[data-rotate]", body).forEach((b) => b.addEventListener("click", () => {
+      if (confirm("Make a new code? The old one stops working.")) go(() => APIARIES.shareCode(cur.id, b.dataset.rotate, true), "New code");
+    }));
+    $$("[data-revoke-code]", body).forEach((b) => b.addEventListener("click", () =>
+      go(() => APIARIES.revokeCode(b.dataset.revokeCode), "Code turned off")));
+    $$("[data-copy]", body).forEach((b) => b.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(b.dataset.copy); toast("Copied"); } catch (e) { toast(b.dataset.copy); }
+    }));
+
+    $("#sh-join", body).addEventListener("click", () => {
+      const c = $("#sh-code", body).value.trim();
+      if (!c) return toast("Paste the code they sent you");
+      go(async () => { const row = await APIARIES.redeem(c); toast("Joined " + (row && row.name ? row.name : "")); });
+    });
+    $("#sh-create", body).addEventListener("click", () => {
+      const n = $("#sh-new", body).value.trim();
+      if (!n) return toast("Give it a name");
+      go(() => APIARIES.create(n), "Created");
+    });
+
+    const lv = $("#sh-leave", body);
+    if (lv) lv.addEventListener("click", () => {
+      if (confirm("Leave this apiary? You'll lose access to its queens.")) go(() => APIARIES.leave(cur.id), "Left");
+    });
+    const dl = $("#sh-delete", body);
+    if (dl) dl.addEventListener("click", () => {
+      if (confirm("Delete " + APIARIES.label(cur) + "? Its queens, photos and notes go with it. This cannot be undone.")) {
+        go(() => APIARIES.destroy(cur.id), "Deleted");
+      }
+    });
+  }
 
   // ================= QUEENS LIST =================
   const buildYearFilter = () => {
@@ -223,6 +686,43 @@
     return list;
   }
 
+  // ---- Queen-card summary lines ----------------------------------------
+  // Mite wash is shown always (so an empty one reads as "go check this hive");
+  // treatment lines only appear when there's actually a treatment on record.
+
+  // Standard action threshold is ~3 mites per 100 bees; 2/100 is the watch line.
+  function miteRate(rec) {
+    if (rec.mite_count == null || !rec.mite_sample_size) return null;
+    return (rec.mite_count / rec.mite_sample_size) * 100;
+  }
+  function miteTone(rec) {
+    const rate = miteRate(rec);
+    const v = rate == null ? rec.mite_count : rate;   // fall back to raw count
+    if (v == null) return "text-hive-800/70";
+    if (v >= 3) return "text-red-600 font-semibold";
+    if (v >= 2) return "text-amber-600 font-semibold";
+    return "text-green-700";
+  }
+  function miteLines(queenId) {
+    const rec = MITE[queenId];
+    if (!rec) {
+      return `<div class="text-hive-800/40">Last Mite Check: <span class="italic">none recorded</span></div>`;
+    }
+    const age = daysSince(rec.date);
+    const stale = age != null && age > 30 ? ` <span class="text-hive-800/40">(${age}d ago)</span>` : "";
+    const rate = miteRate(rec);
+    const per = rate == null ? "" : ` <span class="text-hive-800/50">(${rate.toFixed(1)}/100)</span>`;
+    return `<div>Last Mite Check: ${esc(fmtDate(rec.date))}${stale}</div>
+            <div class="${miteTone(rec)}">Mite Count: ${rec.mite_count}${per}</div>`;
+  }
+  function treatmentLines(queenId) {
+    const rec = TREAT[queenId];
+    if (!rec) return "";                       // nonmandatory — hide when absent
+    const date = rec.treatment_date ? `<div>Last Treatment Date: ${esc(fmtDate(rec.treatment_date))}</div>` : "";
+    const type = rec.product ? `<div>Treatment Type: ${esc(rec.product)}</div>` : "";
+    return date + type;
+  }
+
   async function renderQueens() {
     const grid = $("#queens-grid");
     const list = filteredSorted();
@@ -233,7 +733,7 @@
         const sc = STATUS_COLORS[q.status] || "bg-gray-100 text-gray-600";
         return `
         <div class="queen-card bg-white rounded-xl card-shadow overflow-hidden cursor-pointer hover:ring-2 hover:ring-honey-300" data-id="${q.id}">
-          <div class="h-32 bg-honey-100 flex items-center justify-center text-4xl thumb" data-thumb="${q.id}">🐝</div>
+          <div class="h-72 sm:h-40 lg:h-36 bg-honey-100 flex items-center justify-center text-4xl thumb" data-thumb="${q.id}">🐝</div>
           <div class="p-3">
             <div class="flex items-center gap-2">
               <h3 class="font-bold text-honey-800 truncate">${esc(q.queen_code)}</h3>
@@ -242,8 +742,10 @@
             ${q.name ? `<p class="text-sm text-hive-800/70 -mt-0.5">${esc(q.name)}</p>` : ""}
             <div class="mt-2 text-xs text-hive-800/70 space-y-1">
               <div>${q.year ? "📅 " + q.year : ""} ${q.race_line ? " · 🧬 " + esc(q.race_line) : ""}</div>
-              <div>${q.current_hive ? "🏠 " + esc(q.current_hive) : ""}</div>
+              <div>${q.current_hive ? "Hive: " + esc(q.current_hive) : ""}</div>
               ${mom ? `<div>👑 mother: ${label(mom)}</div>` : ""}
+              ${miteLines(q.id)}
+              ${treatmentLines(q.id)}
               <div class="flex items-center gap-1 pt-1">laying ${ratingDots(q.laying_pattern)}</div>
             </div>
           </div>
@@ -263,10 +765,15 @@
       const url = await data.photoUrl(primary.storage_path);
       const el = document.querySelector(`.thumb[data-thumb="${queenId}"]`);
       if (el && url) {
-        el.style.backgroundImage = `url('${url}')`;
-        el.style.backgroundSize = "cover";
-        el.style.backgroundPosition = "center";
+        // Two layers of the same photo: a blurred, zoomed copy fills the tile
+        // edge to edge, and the real one sits on top at "contain". Nothing is
+        // ever cropped — a portrait shot of a whole hive shows the whole hive —
+        // and there's no dead honey-coloured band beside it either.
+        const src = String(url).replace(/'/g, "%27");
         el.textContent = "";
+        el.innerHTML =
+          `<div class="thumb-blur" style="background-image:url('${src}')"></div>` +
+          `<div class="thumb-img" style="background-image:url('${src}')"></div>`;
       }
     } catch (e) { /* ignore */ }
   }
@@ -325,6 +832,7 @@
   }
 
   function openForm(queen) {
+    if (!APIARIES.canWrite()) { toast("You have read-only access to this apiary."); return; }
     buildRatingWidgets();
     pendingPhotos = [];
     $("#photo-preview").innerHTML = "";
@@ -342,7 +850,8 @@
       F("mother_queen_id").value = queen.mother_queen_id || "";
       F("replaced_by_id").value = queen.replaced_by_id || "";
       RATING_FIELDS.forEach((f) => setRating(f, queen[f]));
-      $("#form-delete").classList.remove("hidden");
+      // Deleting a queen is the owner's call alone — an editor can only change her.
+      $("#form-delete").classList.toggle("hidden", !APIARIES.isOwner());
       renderExistingPhotos(queen.id);
     } else {
       $("#form-title").textContent = "New Queen";
@@ -462,10 +971,12 @@
       dqr.onclick = null;
     }
 
-    // Voice-note button — available for any queen
+    // Voice-note button — any queen you're allowed to write to
+    const canWrite = APIARIES.canWrite();
     const dvoice = $("#detail-voice");
-    dvoice.classList.remove("hidden");
-    dvoice.onclick = () => openVoiceModal(q.id, hiveLabel);
+    dvoice.classList.toggle("hidden", !canWrite);
+    dvoice.onclick = canWrite ? () => openVoiceModal(q.id, hiveLabel) : null;
+    $("#detail-edit").classList.toggle("hidden", !canWrite);
     const body = $("#detail-body");
     const mom = q.mother_queen_id ? byId(q.mother_queen_id) : null;
     const kids = QUEENS.filter((k) => k.mother_queen_id === q.id);
@@ -512,7 +1023,7 @@
       <div class="mt-5 pt-4 border-t border-honey-100">
         <div class="flex items-center gap-2 mb-2">
           <h3 class="text-honey-700 font-semibold text-sm uppercase">Timeline</h3>
-          <button id="add-event-btn" class="ml-auto text-xs bg-honey-100 text-honey-700 rounded px-2 py-1 font-medium">+ Add entry</button>
+          <button id="add-event-btn" class="${canWrite ? "" : "hidden "}ml-auto text-xs bg-honey-100 text-honey-700 rounded px-2 py-1 font-medium">+ Add entry</button>
         </div>
         <form id="event-form" class="hidden gap-2 mb-3 flex-wrap sm:flex-nowrap flex">
           <input id="ev-date" type="date" class="inp" style="max-width:150px" />
@@ -568,7 +1079,7 @@
       <li class="flex gap-2 items-start group">
         <span class="text-honey-600 font-mono text-xs mt-0.5 w-24 shrink-0">${ev.event_date}</span>
         <span class="flex-1">${ev.event_type ? `<b class="text-honey-800">${esc(ev.event_type)}:</b> ` : ""}${esc(ev.note||"")}</span>
-        <button data-ev="${ev.id}" class="text-red-500 opacity-0 group-hover:opacity-100 text-xs">delete</button>
+        ${APIARIES.canWrite() ? `<button data-ev="${ev.id}" class="text-red-500 opacity-0 group-hover:opacity-100 text-xs">delete</button>` : ""}
       </li>`).join("");
     $$("[data-ev]", ul).forEach((b) => b.addEventListener("click", async () => {
       await data.deleteEvent(b.dataset.ev); await renderEvents(id);
@@ -580,12 +1091,14 @@
     window.QT_LINEAGE.render(QUEENS, {
       container: currentLineageView === "tree" ? $("#lineage-tree") : $("#lineage-list"),
       view: currentLineageView,
+      fit: lineageFit,
       onSelect: (id) => openDetail(id),
       label,
       ratingDots,
     });
   }
   let currentLineageView = "tree";
+  let lineageFit = false;
   $("#lin-view-tree").addEventListener("click", () => setLineageView("tree"));
   $("#lin-view-list").addEventListener("click", () => setLineageView("list"));
   function setLineageView(v) {
@@ -594,8 +1107,22 @@
     $("#lineage-list").classList.toggle("hidden", v !== "list");
     $("#lin-view-tree").className = "px-4 py-2 text-sm font-medium " + (v === "tree" ? "bg-honey-500 text-white" : "bg-white text-honey-700");
     $("#lin-view-list").className = "px-4 py-2 text-sm font-medium " + (v === "list" ? "bg-honey-500 text-white" : "bg-white text-honey-700");
+    $("#lin-fit").classList.toggle("hidden", v !== "tree"); // only the tree can be scaled
     renderLineage();
   }
+  $("#lin-fit").addEventListener("click", () => {
+    lineageFit = !lineageFit;
+    $("#lin-fit").className = "px-3 py-2 text-sm font-medium rounded-lg border border-honey-300 " +
+      (lineageFit ? "bg-honey-500 text-white border-honey-500" : "bg-white text-honey-700");
+    renderLineage();
+  });
+  // Bands are packed to the container's width, so a rotate/resize needs a redraw.
+  let linResizeT = null;
+  window.addEventListener("resize", () => {
+    if (currentTab !== "lineage" || currentLineageView !== "tree") return;
+    clearTimeout(linResizeT);
+    linResizeT = setTimeout(renderLineage, 200);
+  });
 
   // ================= STATS =================
   function renderStats() {
@@ -697,7 +1224,7 @@
         <div class="flex items-start gap-3">
           <div class="hive-thumb w-16 h-16 rounded-lg bg-honey-100 flex items-center justify-center text-2xl shrink-0 bg-cover bg-center" ${q ? `data-hivethumb="${q.id}"` : ""}>🐝</div>
           <div class="min-w-0 flex-1">
-            <div class="font-bold text-honey-800">🏠 ${esc(h.label)}</div>
+            <div class="font-bold text-honey-800">Hive: ${esc(h.label)}</div>
             ${q
               ? `<div class="text-sm text-hive-800/70 truncate">${esc(q.queen_code)}${q.name ? " · " + esc(q.name) : ""}</div>
                  <div class="mt-1"><span class="text-xs px-2 py-0.5 rounded-full ${sc} capitalize">${esc(q.status || "")}</span></div>`
@@ -761,36 +1288,91 @@
   $("#qr-print").addEventListener("click", () => printLabels([qrCurrentLabel], ($("#qr-print-size") || {}).value || "medium"));
 
   // ---- Printable label sheet ----
-  // Sizes control how many labels fit per page. w = label width (px), qr = QR px, name = label font.
+  // Sizes are in INCHES, not CSS pixels. Pixel sizes get rescaled by the print
+  // dialog (and by device pixel ratio), which is why "small/medium/large" used
+  // to come out the same on paper. Inches + an explicit @page box print at the
+  // real measured size as long as the print dialog is left at 100% scale.
   const LABEL_SIZES = {
-    small:  { w: 180, qr: 150, name: 18, hint: 10 },
-    medium: { w: 264, qr: 220, name: 24, hint: 12 },
-    large:  { w: 360, qr: 320, name: 30, hint: 14 },
+    small:  { key: "small",  w: 1.5,  qr: 1.2,  name: 12, hint: 7,  desc: "1.5 in" },
+    medium: { key: "medium", w: 2.5,  qr: 2.0,  name: 18, hint: 9,  desc: "2.5 in" },
+    large:  { key: "large",  w: 3.75, qr: 3.1,  name: 26, hint: 11, desc: "3.75 in" },
   };
+  const PAGE_MARGIN_IN = 0.4;           // matches the @page rule below
+  const GAP_IN = 0.2;
+  function labelsPerPage(s) {
+    const usableW = 8.5 - PAGE_MARGIN_IN * 2;
+    const usableH = 11 - PAGE_MARGIN_IN * 2;
+    const labelH = s.qr + 0.75;         // QR + name + hint + padding, approx
+    const cols = Math.max(1, Math.floor((usableW + GAP_IN) / (s.w + GAP_IN)));
+    const rows = Math.max(1, Math.floor((usableH + GAP_IN) / (labelH + GAP_IN)));
+    return cols * rows;
+  }
+
   function printLabels(labels, sizeKey) {
     const s = LABEL_SIZES[sizeKey] || LABEL_SIZES.medium;
+    // Render the QR at a generous pixel density; CSS then scales the vector
+    // down to the exact physical size, so it stays crisp on paper.
     const items = labels.map((l) => {
       let svg = "";
-      try { svg = qrSvg(hiveUrl(l), s.qr); } catch (e) { svg = ""; }
-      return `<div class="label"><div class="qr">${svg}</div><div class="name">🏠 ${esc(l)}</div><div class="hint">Scan to open this hive</div></div>`;
+      try { svg = qrSvg(hiveUrl(l), 512); } catch (e) { svg = ""; }
+      return `<div class="label"><div class="qr">${svg}</div><div class="name">Hive: ${esc(l)}</div><div class="hint">Scan to open this hive</div></div>`;
     }).join("");
     const w = window.open("", "_blank");
     if (!w) return toast("Allow pop-ups to print labels");
-    w.document.write(`<!doctype html><html><head><title>Hive QR labels</title><style>
-      *{box-sizing:border-box} body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:0;padding:16px;color:#2b220f}
-      .sheet{display:flex;flex-wrap:wrap;gap:16px}
-      .label{border:2px dashed #e0b96a;border-radius:12px;padding:14px;width:${s.w}px;text-align:center;page-break-inside:avoid}
-      .qr svg{width:${s.qr}px;height:${s.qr}px}
-      .name{font-size:${s.name}px;font-weight:800;margin-top:8px;color:#894b16}
-      .hint{font-size:${s.hint}px;color:#999;margin-top:2px}
-      @media print{.label{border-color:#bbb}}
-    </style></head><body><div class="sheet">${items}</div>
+    const perPage = labelsPerPage(s);
+    w.document.write(`<!doctype html><html><head><title>Hive QR labels — ${esc(s.desc)}</title><style>
+      @page { size: letter portrait; margin: ${PAGE_MARGIN_IN}in; }
+      *{box-sizing:border-box}
+      html,body{margin:0;padding:0}
+      body{font-family:system-ui,Segoe UI,Roboto,sans-serif;color:#2b220f}
+      .bar{background:#fff7e6;border:1px solid #e0b96a;border-radius:8px;padding:8px 12px;
+           font-size:12px;color:#894b16;margin-bottom:${GAP_IN}in}
+      .sheet{display:flex;flex-wrap:wrap;gap:${GAP_IN}in;align-items:flex-start}
+      .label{border:2px dashed #e0b96a;border-radius:0.12in;padding:0.12in;
+             width:${s.w}in;text-align:center;break-inside:avoid;page-break-inside:avoid}
+      /* Fixed physical box for the QR; the SVG scales into it via its viewBox. */
+      .qr{width:${s.qr}in;height:${s.qr}in;margin:0 auto}
+      .qr svg{width:100%;height:100%;display:block}
+      .name{font-size:${s.name}pt;font-weight:800;margin-top:0.06in;color:#894b16;
+            line-height:1.1;word-break:break-word}
+      .hint{font-size:${s.hint}pt;color:#999;margin-top:0.02in}
+      @media print{
+        .bar{display:none}
+        .label{border-color:#bbb}
+      }
+    </style></head><body>
+    <div class="bar"><b>${labels.length} label${labels.length !== 1 ? "s" : ""}</b> at ${esc(s.desc)} wide
+      (about ${perPage} per page). In the print dialog set <b>Scale: 100%</b> (not "Fit to page")
+      so the tags come out at the size shown.</div>
+    <div class="sheet">${items}</div>
     <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
     </body></html>`);
     w.document.close();
   }
 
   $("#hive-search").addEventListener("input", renderHives);
+
+  // ---- Scan a tag ----
+  // Scanning is a read action, so it's available to read-only members too.
+  // A scanned tag behaves exactly like following its ?hive= link.
+  function scannedHive(label) {
+    const q = findHiveCurrentQueen(label);
+    if (q) { switchTab("queens"); openDetail(q.id); return; }
+    switchTab("hives");
+    const known = deriveHives().some((h) => h.label.toLowerCase() === String(label).trim().toLowerCase());
+    toast(known
+      ? `Hive "${label}" has no queen assigned yet`
+      : `Scanned "${label}" — no hive by that name in this apiary`, 4000);
+  }
+  $("#hives-scan").addEventListener("click", () => {
+    if (!window.QT_SCAN) return toast("Scanner didn't load — try reloading");
+    window.QT_SCAN.open({
+      onHive: scannedHive,
+      onQueen: (id) => { const q = byId(id); if (q) { switchTab("queens"); openDetail(q.id); } else toast("That queen isn't in this apiary"); },
+      onUrl: (url) => toast("That's not a Queen Tracker tag: " + url, 4000),
+    });
+  });
+
   $("#hives-print-all").addEventListener("click", () => {
     const labels = deriveHives().map((h) => h.label);
     if (!labels.length) return toast("No hives to print yet");
@@ -913,7 +1495,9 @@
       ["brood_pattern", "Brood pattern (1-5)", "num"], ["temperament", "Temperament (1-5)", "num"],
       ["population", "Population", "text"], ["stores", "Stores", "text"], ["space", "Space", "text"],
       ["queen_cells", "Queen cells", "bool"], ["swarm_signs", "Swarm signs", "bool"],
-      ["mites", "Mites", "text"], ["pests_disease", "Pests / disease", "text"],
+      ["mite_check_date", "Mite wash date", "date"], ["mite_count", "Mite count (# found)", "int"],
+      ["mite_sample_size", "Bees in sample (e.g. 300)", "int"], ["mite_wash_method", "Wash method", "text"],
+      ["mites", "Mite notes", "text"], ["pests_disease", "Pests / disease", "text"],
       ["actions", "Actions taken", "text"], ["notes", "Notes", "text"],
     ],
     treatment: [
@@ -957,8 +1541,8 @@
             <option value="no" ${v === "no" ? "selected" : ""}>No</option>
           </select></label>`;
       }
-      const inputType = type === "date" ? "date" : type === "num" ? "number" : "text";
-      const minmax = type === "num" ? 'min="1" max="5"' : "";
+      const inputType = type === "date" ? "date" : (type === "num" || type === "int") ? "number" : "text";
+      const minmax = type === "num" ? 'min="1" max="5"' : type === "int" ? 'min="0"' : "";
       return `<label class="block"><span class="lbl">${lbl}</span>
         <input class="inp" data-f="${key}" data-t="${type}" type="${inputType}" ${minmax} value="${val == null ? "" : esc(String(val))}" /></label>`;
     }).join("");
@@ -988,7 +1572,7 @@
     $$("#review-body [data-f]").forEach((el) => {
       const k = el.dataset.f, t = el.dataset.t, v = el.value;
       if (t === "bool") sub[k] = v === "" ? null : v === "yes";
-      else if (t === "num") sub[k] = v === "" ? null : parseInt(v, 10);
+      else if (t === "num" || t === "int") sub[k] = v === "" ? null : parseInt(v, 10);
       else sub[k] = v === "" ? null : v;
     });
   }
@@ -1002,6 +1586,11 @@
       const dateKey = DATE_KEY[kind];
       const row = { ...(reviewState.parsed[kind] || {}) };
       if (!row[dateKey]) row[dateKey] = new Date().toISOString().slice(0, 10);
+      // If a mite count was captured but no separate wash date given, it happened
+      // during this inspection.
+      if (kind === "inspection" && row.mite_count != null && !row.mite_check_date) {
+        row.mite_check_date = row.inspection_date;
+      }
       if (reviewState.parsed.summary && !row.summary) row.summary = reviewState.parsed.summary;
       await data.saveVoiceRecord(kind, row, {
         queen_id: reviewState.meta.queen_id, hive_label: reviewState.meta.hive_label,
@@ -1018,27 +1607,20 @@
   }
 
   // ================= EXPORT =================
-  function download(name, content, type) {
-    const blob = new Blob([content], { type });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
+  // The wizard itself lives in js/export.js; this just hands it the data.
+  function openExport() {
+    if (!QUEENS.length) return toast("Nothing to export yet");
+    if (!window.QT_EXPORT) return toast("Export module didn't load — try reloading");
+    window.QT_EXPORT.open({
+      queens: QUEENS,
+      toast,
+      listAll: (table) => data.listAll(table),
+    });
   }
-  function exportJSON() {
-    download(`queen-tracker-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(QUEENS, null, 2), "application/json");
-    toast("Exported JSON");
-  }
-  function exportCSV() {
-    if (!QUEENS.length) return toast("Nothing to export");
-    const cols = Object.keys(QUEENS[0]).filter((c) => c !== "user_id");
-    const rows = QUEENS.map((q) => cols.map((c) => {
-      const v = q[c] == null ? "" : String(q[c]).replace(/"/g, '""');
-      return `"${v}"`;
-    }).join(","));
-    download(`queen-tracker-${new Date().toISOString().slice(0,10)}.csv`, [cols.join(","), ...rows].join("\n"), "text/csv");
-    toast("Exported CSV");
-  }
+  $("#export-close").addEventListener("click", () => window.QT_EXPORT.close());
+  $("#export-modal").addEventListener("click", (e) => {
+    if (e.target.id === "export-modal") window.QT_EXPORT.close();
+  });
 
   // ================= IMPORT =================
   // Minimal RFC-4180-ish CSV parser (handles quotes, commas & newlines in fields).
