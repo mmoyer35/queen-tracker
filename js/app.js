@@ -837,6 +837,7 @@
     pendingPhotos = [];
     $("#photo-preview").innerHTML = "";
     $("#f-photos").value = "";
+    $("#f-photo-camera").value = "";
     $("#queen-form").reset();
     Object.keys(ratingState).forEach((k) => (ratingState[k] = null));
     RATING_FIELDS.forEach((f) => setRating(f, null));
@@ -872,7 +873,11 @@
   $("#form-cancel").addEventListener("click", closeForm);
 
   // photo staging
-  $("#f-photos").addEventListener("change", (e) => {
+  // Two inputs feed the same staging list: the plain file picker (library, files,
+  // and whatever else the OS offers) and a camera-only one behind the Take a photo
+  // button. They're separate because `capture` on the main input skips the library
+  // entirely on a phone, which is the opposite of what you want most of the time.
+  function stagePhotos(e) {
     for (const file of e.target.files) {
       pendingPhotos.push(file);
       const url = URL.createObjectURL(file);
@@ -882,7 +887,10 @@
       $("#photo-preview").appendChild(chip);
     }
     e.target.value = "";
-  });
+  }
+  $("#f-photos").addEventListener("change", stagePhotos);
+  $("#f-photo-camera").addEventListener("change", stagePhotos);
+  $("#photo-camera-btn").addEventListener("click", () => $("#f-photo-camera").click());
 
   async function renderExistingPhotos(queenId) {
     const box = $("#photo-preview");
