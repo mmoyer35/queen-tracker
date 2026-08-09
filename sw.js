@@ -1,6 +1,6 @@
 // Queen Tracker service worker — offline app shell + CDN caching.
 // Bump CACHE when you change any precached file to force an update.
-const CACHE = "qt-cache-v10";
+const CACHE = "qt-cache-v11";
 
 // Paths are relative to the SW scope, so this works under /queen-tracker/ on
 // GitHub Pages and at the root inside the native app.
@@ -10,6 +10,7 @@ const APP_SHELL = [
   "privacy.html",
   "manifest.webmanifest",
   "js/config.js",
+  "js/dialog.js",
   "js/biometric.js",
   "js/supabaseClient.js",
   "js/apiaries.js",

@@ -27,6 +27,14 @@
     myInvites: async () => [],
   };
 
+  // In-app confirm (js/dialog.js). The browser's own confirm() prints the origin
+  // — "mmoyer35.github.io says" — which can't be changed, so we don't use it.
+  // Falls back to the native one if the module somehow didn't load, because a
+  // missing confirmation is worse than an ugly one: it would delete without asking.
+  const ask = (message, opts) =>
+    window.QT_DIALOG ? window.QT_DIALOG.confirm(message, opts)
+                     : Promise.resolve(window.confirm(message));
+
   // The activity vocabulary (js/activities.js). Falls back to an empty-ish stub
   // so a stale cached copy of that file can't take the whole detail view down.
   const ACT = window.QT_ACTIVITIES || {
@@ -623,8 +631,9 @@
 
     $$("[data-role-for]", body).forEach((s) => s.addEventListener("change", () =>
       go(() => APIARIES.setRole(cur.id, s.dataset.roleFor, s.value), "Updated")));
-    $$("[data-remove]", body).forEach((b) => b.addEventListener("click", () => {
-      if (confirm("Remove this person? They lose access immediately.")) go(() => APIARIES.removeMember(cur.id, b.dataset.remove), "Removed");
+    $$("[data-remove]", body).forEach((b) => b.addEventListener("click", async () => {
+      if (await ask("Remove this person? They lose access immediately.", { confirmText: "Remove", danger: true }))
+        go(() => APIARIES.removeMember(cur.id, b.dataset.remove), "Removed");
     }));
     $$("[data-revoke]", body).forEach((b) => b.addEventListener("click", () =>
       go(() => APIARIES.revokeInvite(b.dataset.revoke), "Invite revoked")));
@@ -638,8 +647,9 @@
 
     $$("[data-mint]", body).forEach((b) => b.addEventListener("click", () =>
       go(() => APIARIES.shareCode(cur.id, b.dataset.mint, false), "Code created")));
-    $$("[data-rotate]", body).forEach((b) => b.addEventListener("click", () => {
-      if (confirm("Make a new code? The old one stops working.")) go(() => APIARIES.shareCode(cur.id, b.dataset.rotate, true), "New code");
+    $$("[data-rotate]", body).forEach((b) => b.addEventListener("click", async () => {
+      if (await ask("Make a new code? The old one stops working.", { confirmText: "New code" }))
+        go(() => APIARIES.shareCode(cur.id, b.dataset.rotate, true), "New code");
     }));
     $$("[data-revoke-code]", body).forEach((b) => b.addEventListener("click", () =>
       go(() => APIARIES.revokeCode(b.dataset.revokeCode), "Code turned off")));
@@ -659,12 +669,14 @@
     });
 
     const lv = $("#sh-leave", body);
-    if (lv) lv.addEventListener("click", () => {
-      if (confirm("Leave this apiary? You'll lose access to its queens.")) go(() => APIARIES.leave(cur.id), "Left");
+    if (lv) lv.addEventListener("click", async () => {
+      if (await ask("Leave this apiary? You'll lose access to its queens.", { confirmText: "Leave", danger: true }))
+        go(() => APIARIES.leave(cur.id), "Left");
     });
     const dl = $("#sh-delete", body);
-    if (dl) dl.addEventListener("click", () => {
-      if (confirm("Delete " + APIARIES.label(cur) + "? Its queens, photos and notes go with it. This cannot be undone.")) {
+    if (dl) dl.addEventListener("click", async () => {
+      if (await ask("Delete " + APIARIES.label(cur) + "? Its queens, photos and notes go with it. This cannot be undone.",
+                    { confirmText: "Delete", danger: true })) {
         go(() => APIARIES.destroy(cur.id), "Deleted");
       }
     });
@@ -968,7 +980,7 @@
       });
 
       chip.querySelector('[data-role="del"]').addEventListener("click", async () => {
-        if (!confirm("Delete this photo?")) return;
+        if (!(await ask("Delete this photo?", { confirmText: "Delete", danger: true }))) return;
         const wasPrimary = p.is_primary || (shown && shown.id === p.id);
         await data.deletePhoto(p);
         stars.delete(p.id);
@@ -1025,7 +1037,8 @@
     const id = $("#f-id").value;
     const q = byId(id);
     if (!q) return;
-    if (!confirm(`Delete queen "${q.queen_code}"? This also removes her photos and events. This cannot be undone.`)) return;
+    if (!(await ask(`Delete queen "${q.queen_code}"? This also removes her photos and events. This cannot be undone.`,
+                    { confirmText: "Delete", danger: true }))) return;
     try {
       await data.deleteQueen(id);
       toast("Queen deleted");
@@ -1244,19 +1257,26 @@
       // but not casually — one confirmation, then it behaves like any other box
       // for the rest of this entry.
       let sampleUnlocked = false;
-      const askFirst = (e) => {
-        if (sampleUnlocked) return;
+      let sampleAsking = false;          // the dialog is async now — don't stack them
+      const askFirst = async (e) => {
+        if (sampleUnlocked || sampleAsking) return;
         if (e) e.preventDefault();
+        sampleAsking = true;
         sample.blur();
-        const go = confirm(
-          "A half cup of bees — 300 — is the standard sample for an alcohol wash or " +
-          "sugar roll, and the infestation percentage assumes it.\n\n" +
-          "Change the sample size anyway?");
-        if (!go) return;                 // stays locked; ask again on the next tap
-        sampleUnlocked = true;
-        sample.removeAttribute("readonly");
-        sample.focus();
-        sample.select();
+        try {
+          const go = await ask(
+            "A half cup of bees — 300 — is the standard sample for an alcohol wash or " +
+            "sugar roll, and the infestation percentage assumes it.\n\n" +
+            "Change the sample size anyway?",
+            { confirmText: "Change it", cancelText: "Keep 300" });
+          if (!go) return;               // stays locked; ask again on the next tap
+          sampleUnlocked = true;
+          sample.removeAttribute("readonly");
+          sample.focus();
+          sample.select();
+        } finally {
+          sampleAsking = false;
+        }
       };
       sample.addEventListener("mousedown", askFirst);
       sample.addEventListener("touchstart", askFirst);
@@ -1963,7 +1983,8 @@
         rows = csvToObjects(text);
       }
       if (!rows || !rows.length) return toast("Nothing to import from that file");
-      if (!confirm(`Import ${rows.length} record(s) from "${file.name}"?\n\nRecords that share an ID with an existing queen will be updated; the rest are added new.`)) return;
+      if (!(await ask(`Import ${rows.length} record(s) from "${file.name}"?\n\nRecords that share an ID with an existing queen will be updated; the rest are added new.`,
+                      { confirmText: "Import" }))) return;
       toast("Importing…");
       const res = await data.importQueens(rows);
       await refresh();

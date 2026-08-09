@@ -229,8 +229,13 @@
       }
     });
 
-    el("scan-manual").addEventListener("click", () => {
-      const label = prompt("Hive name (as written on the tag):");
+    el("scan-manual").addEventListener("click", async () => {
+      // In-app prompt so the sheet is titled Queen Tracker rather than stamped
+      // with the domain; native prompt() only if the dialog module didn't load.
+      const label = window.QT_DIALOG
+        ? await window.QT_DIALOG.prompt("Hive name (as written on the tag):",
+            { placeholder: "e.g. S-1", confirmText: "Open hive" })
+        : prompt("Hive name (as written on the tag):");
       if (label == null) return;
       const v = label.trim();
       if (!v) return;
