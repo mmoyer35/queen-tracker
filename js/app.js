@@ -718,7 +718,7 @@
     return ACT.miteRate(rec.mite_count, rec.mite_sample_size);
   }
   function miteTone(rec) {
-    const band = ACT.miteBand(rec.mite_count, rec.mite_count_capped);
+    const band = ACT.miteBand(rec.mite_count, rec.mite_count_capped, rec.mite_sample_size);
     if (band === "red") return "text-red-600 font-semibold";
     if (band === "amber") return "text-amber-600 font-semibold";
     if (band === "green") return "text-green-700";
@@ -735,7 +735,7 @@
     const rate = miteRate(rec);
     const per = rate == null ? "" : ` <span class="text-hive-800/50">(${capped ? "≥" : ""}${rate.toFixed(1)}%)</span>`;
     const shown = capped ? "20+" : rec.mite_count;
-    const treat = ACT.miteBand(rec.mite_count, capped) === "red" ? " — TREAT" : "";
+    const treat = ACT.miteBand(rec.mite_count, capped, rec.mite_sample_size) === "red" ? " — TREAT" : "";
     return `<div>Last Mite Check: ${esc(fmtDate(rec.date))}${stale}</div>
             <div class="${miteTone(rec)}">Mite Count: ${shown}${per}${treat}</div>`;
   }
@@ -1217,13 +1217,17 @@
         const raw = $("#ev-mite-count").value;
         const capped = raw === "20+";
         const n = capped ? ACT.MITE_CAP : parseInt(raw, 10);
-        const rate = ACT.miteRate(n, $("#ev-mite-sample").value);
-        const band = ACT.miteBand(n, capped);
+        const sampleVal = $("#ev-mite-sample").value;
+        const rate = ACT.miteRate(n, sampleVal);
+        const band = ACT.miteBand(n, capped, sampleVal);
         const tone = band === "red" ? "text-red-600" : band === "amber" ? "text-amber-600" : "text-green-700";
         $("#ev-mite-readout").className = "text-sm pb-2 font-semibold " + tone;
         $("#ev-mite-readout").textContent =
           (rate == null ? "" : `${capped ? "≥" : ""}${rate.toFixed(1)}% infestation`) +
-          (band === "red" ? " — TREAT" : band === "amber" ? " — watch" : "");
+          (band === "red" ? " — TREAT" : band === "amber" ? " — watch" : "") +
+          // Say which rule is being applied, so a count that would be red at a
+          // half cup but isn't here doesn't look like a bug.
+          (ACT.bandedByRate(sampleVal) && !capped ? " (judged by rate, not count)" : "");
       };
       // Scoop sizes, so the number means something to a beekeeper holding a cup.
       const sample = $("#ev-mite-sample");
@@ -1307,6 +1311,9 @@
       const sample = parseInt($("#ev-mite-sample").value, 10) || ACT.MITE_SAMPLE_DEFAULT;
       return {
         ...base, value_num: count, event_detail: capped ? "20+" : String(count),
+        // The scoop rides along on the timeline row so the entry can be banded
+        // without going back to the inspections table to ask how many bees.
+        event_subtype: String(sample),
         table: "inspections",
         record: {
           inspection_date: date, mite_check_date: date,
@@ -1352,9 +1359,13 @@
       if (t && t.special === "percent" && ev.value_num != null) chip += ` <b>${ev.value_num}%</b>`;
       if (t && t.special === "mite" && ev.value_num != null) {
         const capped = ev.event_detail === "20+";
-        const band = ACT.miteBand(Number(ev.value_num), capped);
+        // event_subtype holds the sample size for a mite check. Older rows and
+        // backfilled ones have none, which correctly falls back to count bands.
+        const sample = parseInt(ev.event_subtype, 10);
+        const band = ACT.miteBand(Number(ev.value_num), capped, sample);
         const tone = band === "red" ? "text-red-600" : band === "amber" ? "text-amber-600" : "text-green-700";
-        chip = ` <span class="${tone} font-semibold">${capped ? "20+" : ev.value_num} mite${ev.value_num == 1 && !capped ? "" : "s"}${band === "red" ? " — TREAT" : ""}</span>`;
+        const scoop = ACT.bandedByRate(sample) ? ` <span class="text-hive-800/50">/${sample}</span>` : "";
+        chip = ` <span class="${tone} font-semibold">${capped ? "20+" : ev.value_num} mite${ev.value_num == 1 && !capped ? "" : "s"}${band === "red" ? " — TREAT" : ""}</span>${scoop}`;
       }
       return `
       <li class="flex gap-2 items-start group">

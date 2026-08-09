@@ -111,17 +111,43 @@
   // watch it, 9+ (3% of a 300-bee sample) is act. 20+ is the top of the picker
   // and always reads TREAT.
   const MITE_CAP = 20;
+
+  // The count thresholds and the rate thresholds are the same two lines, just
+  // expressed differently: 9 mites in 300 bees IS 3%, and 2 in 300 IS 0.667%.
+  // Keeping them in sync matters — it means the banding doesn't jump when the
+  // scoop changes, and a half-cup sample lands identically under either rule.
+  const MITE_RED_COUNT = 9;
+  const MITE_AMBER_COUNT = 2;
+  const MITE_RED_PCT = (MITE_RED_COUNT / MITE_SAMPLE_DEFAULT) * 100;      // 3.0
+  const MITE_AMBER_PCT = (MITE_AMBER_COUNT / MITE_SAMPLE_DEFAULT) * 100;  // 0.667
+
   function miteRate(count, sample) {
     const s = Number(sample) || MITE_SAMPLE_DEFAULT;
     if (count == null || !s) return null;
     return (Number(count) / s) * 100;
   }
-  function miteBand(count, capped) {
+
+  // Band a wash. A raw count only means what the thresholds say if the scoop is
+  // the standard half cup — 12 mites is alarming out of 300 bees and ordinary
+  // out of 600. So counts are used at 300 (and when the scoop is unknown, which
+  // is what every older row looks like), and the rate is used for any other
+  // sample size.
+  function miteBand(count, capped, sample) {
     if (capped) return "red";
     if (count == null) return null;
-    if (count >= 9) return "red";
-    if (count >= 2) return "amber";
-    return "green";
+    const s = Number(sample);
+    if (!s || s === MITE_SAMPLE_DEFAULT) {
+      return count >= MITE_RED_COUNT ? "red" : count >= MITE_AMBER_COUNT ? "amber" : "green";
+    }
+    const rate = miteRate(count, s);
+    return rate >= MITE_RED_PCT ? "red" : rate >= MITE_AMBER_PCT ? "amber" : "green";
+  }
+
+  // True when the band came from the rate rather than the raw count, so the UI
+  // can say so instead of leaving the beekeeper to wonder why 12 isn't red.
+  function bandedByRate(sample) {
+    const s = Number(sample);
+    return !!s && s !== MITE_SAMPLE_DEFAULT;
   }
   // Options for the count picker: 0…20 then "20+".
   function miteOptions() {
@@ -133,6 +159,8 @@
 
   window.QT_ACTIVITIES = {
     TYPES, byKey, resolve, labelFor, iconFor,
-    MITE_SAMPLE_DEFAULT, MITE_CAP, CUPS, miteRate, miteBand, miteOptions,
+    MITE_SAMPLE_DEFAULT, MITE_CAP, CUPS,
+    MITE_RED_COUNT, MITE_AMBER_COUNT, MITE_RED_PCT, MITE_AMBER_PCT,
+    miteRate, miteBand, bandedByRate, miteOptions,
   };
 })();
