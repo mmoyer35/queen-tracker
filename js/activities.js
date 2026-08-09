@@ -24,6 +24,10 @@
   // the denominator behind the infestation percentage on the queen card.
   const MITE_SAMPLE_DEFAULT = 300;
 
+  // Scoop sizes beekeepers actually measure with, so the sample box can say
+  // what the number means. Anything else is fine, just flagged as non-standard.
+  const CUPS = { 75: "⅛ cup", 150: "¼ cup", 300: "½ cup", 450: "¾ cup", 600: "1 cup" };
+
   // Varroa products, shared by "applied" and "removed" so a strip you pull is
   // named exactly the same way as the strip you put in.
   const VARROA_SUBS = [
@@ -129,6 +133,6 @@
 
   window.QT_ACTIVITIES = {
     TYPES, byKey, resolve, labelFor, iconFor,
-    MITE_SAMPLE_DEFAULT, MITE_CAP, miteRate, miteBand, miteOptions,
+    MITE_SAMPLE_DEFAULT, MITE_CAP, CUPS, miteRate, miteBand, miteOptions,
   };
 })();

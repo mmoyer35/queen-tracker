@@ -1,6 +1,6 @@
 // Queen Tracker service worker — offline app shell + CDN caching.
 // Bump CACHE when you change any precached file to force an update.
-const CACHE = "qt-cache-v8";
+const CACHE = "qt-cache-v9";
 
 // Paths are relative to the SW scope, so this works under /queen-tracker/ on
 // GitHub Pages and at the root inside the native app.

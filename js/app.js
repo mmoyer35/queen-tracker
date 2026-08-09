@@ -32,7 +32,7 @@
   const ACT = window.QT_ACTIVITIES || {
     TYPES: [{ key: "note", label: "Note / other", icon: "📝", table: null }],
     byKey: { note: { key: "note", label: "Note / other", icon: "📝", table: null } },
-    resolve: () => null, MITE_CAP: 20, MITE_SAMPLE_DEFAULT: 300,
+    resolve: () => null, MITE_CAP: 20, MITE_SAMPLE_DEFAULT: 300, CUPS: {},
     miteRate: () => null, miteBand: () => null, miteOptions: () => [],
   };
 
@@ -1204,10 +1204,14 @@
       box.innerHTML =
         sel("ev-mite-count", "Mites found", opts, "max-width:150px") +
         `<label class="block"><span class="lbl">Bees in sample</span>
-           <!-- step must stay 1: with step="50" the browser silently refuses to
-                submit the default 300, because 300 isn't reachable from min=1. -->
-           <input class="inp" id="ev-mite-sample" type="number" min="1" step="1"
-                  value="${ACT.MITE_SAMPLE_DEFAULT}" style="max-width:130px" /></label>
+           <div class="flex items-center gap-2">
+             <!-- step must stay 1: with step="50" the browser silently refuses to
+                  submit the default 300, because 300 isn't reachable from min=1.
+                  readonly is the "are you sure" guard, lifted on confirmation. -->
+             <input class="inp" id="ev-mite-sample" type="number" min="1" step="1" readonly
+                    value="${ACT.MITE_SAMPLE_DEFAULT}" style="max-width:110px" />
+             <span id="ev-mite-cup" class="text-xs text-hive-800/60 whitespace-nowrap"></span>
+           </div></label>
          <div id="ev-mite-readout" class="text-sm pb-2 font-semibold"></div>`;
       const paint = () => {
         const raw = $("#ev-mite-count").value;
@@ -1221,9 +1225,45 @@
           (rate == null ? "" : `${capped ? "≥" : ""}${rate.toFixed(1)}% infestation`) +
           (band === "red" ? " — TREAT" : band === "amber" ? " — watch" : "");
       };
+      // Scoop sizes, so the number means something to a beekeeper holding a cup.
+      const sample = $("#ev-mite-sample");
+      const paintCup = () => {
+        const n = parseInt(sample.value, 10);
+        const cup = ACT.CUPS[n];
+        $("#ev-mite-cup").textContent = cup ? `(${cup})` : "(non-standard scoop)";
+        $("#ev-mite-cup").className = "text-xs whitespace-nowrap " +
+          (cup ? "text-hive-800/60" : "text-amber-600 font-medium");
+      };
+
+      // 300 is the standard, and the infestation percentage is only comparable
+      // between hives if everyone uses the same scoop. So the field is editable
+      // but not casually — one confirmation, then it behaves like any other box
+      // for the rest of this entry.
+      let sampleUnlocked = false;
+      const askFirst = (e) => {
+        if (sampleUnlocked) return;
+        if (e) e.preventDefault();
+        sample.blur();
+        const go = confirm(
+          "A half cup of bees — 300 — is the standard sample for an alcohol wash or " +
+          "sugar roll, and the infestation percentage assumes it.\n\n" +
+          "Change the sample size anyway?");
+        if (!go) return;                 // stays locked; ask again on the next tap
+        sampleUnlocked = true;
+        sample.removeAttribute("readonly");
+        sample.focus();
+        sample.select();
+      };
+      sample.addEventListener("mousedown", askFirst);
+      sample.addEventListener("touchstart", askFirst);
+      sample.addEventListener("focus", askFirst);
+      sample.addEventListener("keydown", askFirst);
+
       $("#ev-mite-count").addEventListener("change", paint);
-      $("#ev-mite-sample").addEventListener("input", paint);
+      sample.addEventListener("input", () => { paint(); paintCup(); });
+      sample.addEventListener("change", () => { paint(); paintCup(); });
       paint();
+      paintCup();
       return;
     }
 
