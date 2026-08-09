@@ -86,3 +86,32 @@ drop policy if exists "hive audio - update own" on storage.objects;
 create policy "hive audio - update own" on storage.objects for update using (bucket_id='hive-audio' and (storage.foldername(name))[1] = auth.uid()::text);
 drop policy if exists "hive audio - delete own" on storage.objects;
 create policy "hive audio - delete own" on storage.objects for delete using (bucket_id='hive-audio' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ---------------------------------------------------------------------------
+--  Mite-wash columns.
+--  These existed in production before they existed here — they were added by
+--  hand and never written back, so a fresh deploy from this file produced an
+--  app whose queen cards could never show a mite count. Recorded now so the
+--  two agree.
+-- ---------------------------------------------------------------------------
+alter table public.inspections add column if not exists mite_check_date  date;
+alter table public.inspections add column if not exists mite_count       integer;
+alter table public.inspections add column if not exists mite_sample_size integer;
+alter table public.inspections add column if not exists mite_wash_method text;
+
+-- ---------------------------------------------------------------------------
+--  Structured timeline activities (see js/activities.js for the vocabulary).
+--  All additive and nullable; no RLS policy is touched.
+-- ---------------------------------------------------------------------------
+alter table public.queen_events add column if not exists event_subtype text;
+alter table public.queen_events add column if not exists event_detail  text;
+alter table public.queen_events add column if not exists value_num     numeric;
+
+-- "20+" is a real answer to a mite wash, not the number 20.
+alter table public.inspections add column if not exists mite_count_capped boolean not null default false;
+
+-- Top level of the treatment / feed cascade; product and feed_type hold the leaf.
+alter table public.treatments add column if not exists category text;
+alter table public.feedings   add column if not exists category text;
+
+create index if not exists queen_events_ref_idx on public.queen_events (ref_kind, ref_id);

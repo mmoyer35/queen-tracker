@@ -27,6 +27,15 @@
     myInvites: async () => [],
   };
 
+  // The activity vocabulary (js/activities.js). Falls back to an empty-ish stub
+  // so a stale cached copy of that file can't take the whole detail view down.
+  const ACT = window.QT_ACTIVITIES || {
+    TYPES: [{ key: "note", label: "Note / other", icon: "📝", table: null }],
+    byKey: { note: { key: "note", label: "Note / other", icon: "📝", table: null } },
+    resolve: () => null, MITE_CAP: 20, MITE_SAMPLE_DEFAULT: 300,
+    miteRate: () => null, miteBand: () => null, miteOptions: () => [],
+  };
+
   // Local cache of queens for fast rendering / lineage / dropdowns
   let QUEENS = [];
   let MITE = {};   // queen_id -> most recent mite wash
@@ -326,15 +335,26 @@
       toast("Load error: " + e.message);
       QUEENS = [];
     }
-    // Card summaries (mite wash / treatment). Non-fatal: if these tables
-    // aren't migrated yet the cards just omit those lines.
-    try { MITE = await data.latestMiteChecks(); } catch (e) { MITE = {}; }
-    try { TREAT = await data.latestTreatments(); } catch (e) { TREAT = {}; }
+    await refreshCardSummaries();
     buildYearFilter();
     renderQueens();
     if (currentTab === "hives") renderHives();
     if (currentTab === "lineage") renderLineage();
     if (currentTab === "stats") renderStats();
+  }
+
+  // Re-read the two summary tables behind the queen card. Called after a full
+  // refresh and after any timeline write, so logging a mite check updates the
+  // card immediately instead of waiting for a reload.
+  //
+  // Non-fatal by design: if these tables aren't migrated the cards just omit
+  // those lines. Worth knowing that this swallow is also what made the original
+  // bug so quiet — so it now says something out loud when it trips.
+  async function refreshCardSummaries() {
+    try { MITE = await data.latestMiteChecks(); }
+    catch (e) { MITE = {}; console.warn("Mite summaries unavailable:", e.message || e); }
+    try { TREAT = await data.latestTreatments(); }
+    catch (e) { TREAT = {}; console.warn("Treatment summaries unavailable:", e.message || e); }
   }
 
   // ================= TABS =================
@@ -690,18 +710,19 @@
   // Mite wash is shown always (so an empty one reads as "go check this hive");
   // treatment lines only appear when there's actually a treatment on record.
 
-  // Standard action threshold is ~3 mites per 100 bees; 2/100 is the watch line.
+  // Thresholds are counts, not rates: 0-1 is clean, 2-8 is watch it, 9+ is act.
+  // Nine mites in a half-cup (300-bee) sample is 3%, the standard action point,
+  // which is why the two agree at the top end. The infestation percentage is
+  // shown alongside so a non-standard sample size still reads correctly.
   function miteRate(rec) {
-    if (rec.mite_count == null || !rec.mite_sample_size) return null;
-    return (rec.mite_count / rec.mite_sample_size) * 100;
+    return ACT.miteRate(rec.mite_count, rec.mite_sample_size);
   }
   function miteTone(rec) {
-    const rate = miteRate(rec);
-    const v = rate == null ? rec.mite_count : rate;   // fall back to raw count
-    if (v == null) return "text-hive-800/70";
-    if (v >= 3) return "text-red-600 font-semibold";
-    if (v >= 2) return "text-amber-600 font-semibold";
-    return "text-green-700";
+    const band = ACT.miteBand(rec.mite_count, rec.mite_count_capped);
+    if (band === "red") return "text-red-600 font-semibold";
+    if (band === "amber") return "text-amber-600 font-semibold";
+    if (band === "green") return "text-green-700";
+    return "text-hive-800/70";
   }
   function miteLines(queenId) {
     const rec = MITE[queenId];
@@ -710,16 +731,22 @@
     }
     const age = daysSince(rec.date);
     const stale = age != null && age > 30 ? ` <span class="text-hive-800/40">(${age}d ago)</span>` : "";
+    const capped = !!rec.mite_count_capped;
     const rate = miteRate(rec);
-    const per = rate == null ? "" : ` <span class="text-hive-800/50">(${rate.toFixed(1)}/100)</span>`;
+    const per = rate == null ? "" : ` <span class="text-hive-800/50">(${capped ? "≥" : ""}${rate.toFixed(1)}%)</span>`;
+    const shown = capped ? "20+" : rec.mite_count;
+    const treat = ACT.miteBand(rec.mite_count, capped) === "red" ? " — TREAT" : "";
     return `<div>Last Mite Check: ${esc(fmtDate(rec.date))}${stale}</div>
-            <div class="${miteTone(rec)}">Mite Count: ${rec.mite_count}${per}</div>`;
+            <div class="${miteTone(rec)}">Mite Count: ${shown}${per}${treat}</div>`;
   }
   function treatmentLines(queenId) {
     const rec = TREAT[queenId];
     if (!rec) return "";                       // nonmandatory — hide when absent
     const date = rec.treatment_date ? `<div>Last Treatment Date: ${esc(fmtDate(rec.treatment_date))}</div>` : "";
-    const type = rec.product ? `<div>Treatment Type: ${esc(rec.product)}</div>` : "";
+    // Show the cascade the way it was picked — "Chemical · Oxalic Acid" — but
+    // fall back to the bare product for rows written before categories existed.
+    const label = [rec.category, rec.product].filter(Boolean).join(" · ");
+    const type = label ? `<div>Treatment Type: ${esc(label)}</div>` : "";
     return date + type;
   }
 
@@ -895,21 +922,75 @@
   async function renderExistingPhotos(queenId) {
     const box = $("#photo-preview");
     const photos = await data.listPhotos(queenId);
+    // The card and the hive tile show whichever photo is flagged primary, falling
+    // back to the oldest. Reflect that same rule here so the star always marks the
+    // picture actually on display, even before anyone has chosen one.
+    const shown = photos.find((p) => p.is_primary) || photos[0];
+
+    // Star buttons live outside the per-photo closure so picking one can un-light
+    // the others without re-fetching the whole list.
+    const stars = new Map();
+    function paint(activeId) {
+      stars.forEach((s, id) => {
+        const on = id === activeId;
+        s.btn.textContent = on ? "★" : "☆";
+        s.btn.title = on ? "This is the queen's main photo" : "Use as the main photo";
+        s.btn.className = "absolute -bottom-1 -left-1 rounded-full w-5 h-5 text-xs leading-none " +
+          (on ? "bg-honey-500 text-white" : "bg-white/90 text-hive-800/60 border border-honey-200");
+        s.img.classList.toggle("ring-2", on);
+        s.img.classList.toggle("ring-honey-500", on);
+      });
+    }
+
     for (const p of photos) {
       const url = await data.photoUrl(p.storage_path);
       const chip = document.createElement("div");
       chip.className = "relative group";
       chip.innerHTML = `
         <img src="${url}" class="w-16 h-16 object-cover rounded-lg border border-honey-200" />
-        <button type="button" title="Remove" class="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs">×</button>`;
-      chip.querySelector("button").addEventListener("click", async () => {
-        if (!confirm("Delete this photo?")) return;
-        await data.deletePhoto(p);
-        chip.remove();
-        toast("Photo deleted");
+        <button type="button" data-role="star"></button>
+        <button type="button" data-role="del" title="Remove" class="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 text-xs">×</button>`;
+
+      const starBtn = chip.querySelector('[data-role="star"]');
+      stars.set(p.id, { btn: starBtn, img: chip.querySelector("img") });
+      starBtn.addEventListener("click", async () => {
+        const prev = photos.find((x) => x.is_primary) || null;
+        try {
+          paint(p.id);                       // optimistic: the tap should feel instant
+          await data.setPrimaryPhoto(queenId, p.id);
+          photos.forEach((x) => (x.is_primary = x.id === p.id));
+          toast("Main photo updated");
+          renderQueens();                    // the card behind the form updates too
+        } catch (err) {
+          paint(prev ? prev.id : (photos[0] && photos[0].id));   // put the star back
+          toast("Couldn't set the main photo: " + (err.message || err), 4000);
+        }
       });
+
+      chip.querySelector('[data-role="del"]').addEventListener("click", async () => {
+        if (!confirm("Delete this photo?")) return;
+        const wasPrimary = p.is_primary || (shown && shown.id === p.id);
+        await data.deletePhoto(p);
+        stars.delete(p.id);
+        chip.remove();
+        const idx = photos.findIndex((x) => x.id === p.id);
+        if (idx >= 0) photos.splice(idx, 1);
+        // Deleting the main photo would otherwise leave the queen starless; hand
+        // the badge to the next one so the card never falls back silently.
+        if (wasPrimary && photos.length) {
+          try {
+            await data.setPrimaryPhoto(queenId, photos[0].id);
+            photos.forEach((x) => (x.is_primary = x.id === photos[0].id));
+            paint(photos[0].id);
+          } catch (err) { /* the fallback-to-oldest read path still covers us */ }
+        }
+        toast("Photo deleted");
+        renderQueens();
+      });
+
       box.appendChild(chip);
     }
+    paint(shown ? shown.id : null);
   }
 
   $("#queen-form").addEventListener("submit", async (e) => {
@@ -1033,11 +1114,18 @@
           <h3 class="text-honey-700 font-semibold text-sm uppercase">Timeline</h3>
           <button id="add-event-btn" class="${canWrite ? "" : "hidden "}ml-auto text-xs bg-honey-100 text-honey-700 rounded px-2 py-1 font-medium">+ Add entry</button>
         </div>
-        <form id="event-form" class="hidden gap-2 mb-3 flex-wrap sm:flex-nowrap flex">
-          <input id="ev-date" type="date" class="inp" style="max-width:150px" />
-          <input id="ev-type" class="inp" placeholder="type (inspection…)" style="max-width:160px" />
-          <input id="ev-note" class="inp" placeholder="note" />
-          <button class="bg-honey-500 text-white rounded-lg px-3 text-sm">Add</button>
+        <form id="event-form" class="hidden mb-3 space-y-2 bg-honey-50 rounded-lg p-3">
+          <div class="flex gap-2 flex-wrap sm:flex-nowrap">
+            <input id="ev-date" type="date" class="inp" style="max-width:150px" />
+            <select id="ev-type" class="inp" style="max-width:220px" aria-label="Activity"></select>
+          </div>
+          <!-- Filled by renderEventCascade() from js/activities.js. -->
+          <div id="ev-cascade" class="flex gap-2 flex-wrap items-end"></div>
+          <input id="ev-note" class="inp" placeholder="note (optional)" />
+          <div class="flex gap-2 justify-end">
+            <button type="button" id="ev-cancel" class="rounded-lg px-3 py-1.5 text-sm border border-honey-200 hover:bg-white">Cancel</button>
+            <button class="bg-honey-500 hover:bg-honey-600 text-white rounded-lg px-4 py-1.5 text-sm font-semibold">Add</button>
+          </div>
         </form>
         <ul id="events-list" class="space-y-1 text-sm"></ul>
       </div>`;
@@ -1063,34 +1151,183 @@
 
     // events
     await renderEvents(id);
+    const evForm = $("#event-form");
+    $("#ev-type").innerHTML = ACT.TYPES
+      .map((t) => `<option value="${t.key}">${t.icon} ${esc(t.label)}</option>`).join("");
+    $("#ev-type").addEventListener("change", renderEventCascade);
+    renderEventCascade();
+
     $("#add-event-btn").addEventListener("click", () => {
-      $("#event-form").classList.toggle("hidden");
+      evForm.classList.toggle("hidden");
       $("#ev-date").value = new Date().toISOString().slice(0, 10);
     });
-    $("#event-form").addEventListener("submit", async (e) => {
+    $("#ev-cancel").addEventListener("click", () => evForm.classList.add("hidden"));
+    evForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const d = $("#ev-date").value;
-      if (!d) return;
-      await data.addEvent(id, d, $("#ev-type").value, $("#ev-note").value);
-      $("#event-form").reset();
-      $("#event-form").classList.add("hidden");
-      await renderEvents(id);
-      toast("Timeline entry added");
+      if (!d) return toast("Pick a date first");
+      const btn = $("#event-form button:not([type=button])");
+      btn.disabled = true;
+      try {
+        await data.addTimelineEntry(id, buildTimelineEntry(d));
+        evForm.reset();
+        evForm.classList.add("hidden");
+        // The whole point of the rewrite: a mite check or treatment logged here
+        // has to reach the queen's card, which reads its own summary tables.
+        await refreshCardSummaries();
+        await renderEvents(id);
+        renderQueens();
+        toast("Timeline entry added");
+      } catch (err) {
+        toast("Couldn't save that: " + (err.message || err), 4500);
+      } finally {
+        btn.disabled = false;
+      }
     });
+  }
+
+  // ---- Activity cascade -------------------------------------------------
+  // Every extra control is rebuilt from the taxonomy each time the activity
+  // changes, so adding an activity in js/activities.js needs no change here.
+  function renderEventCascade() {
+    const box = $("#ev-cascade");
+    if (!box) return;
+    const t = ACT.byKey[$("#ev-type").value];
+    if (!t) { box.innerHTML = ""; return; }
+    const sel = (id, lbl, opts, style) =>
+      `<label class="block"><span class="lbl">${lbl}</span>
+         <select class="inp" id="${id}" ${style ? `style="${style}"` : ""}>${opts}</select></label>`;
+
+    if (t.special === "mite") {
+      const opts = ACT.miteOptions()
+        .map((o) => `<option value="${o.value}">${o.label}</option>`).join("");
+      box.innerHTML =
+        sel("ev-mite-count", "Mites found", opts, "max-width:150px") +
+        `<label class="block"><span class="lbl">Bees in sample</span>
+           <!-- step must stay 1: with step="50" the browser silently refuses to
+                submit the default 300, because 300 isn't reachable from min=1. -->
+           <input class="inp" id="ev-mite-sample" type="number" min="1" step="1"
+                  value="${ACT.MITE_SAMPLE_DEFAULT}" style="max-width:130px" /></label>
+         <div id="ev-mite-readout" class="text-sm pb-2 font-semibold"></div>`;
+      const paint = () => {
+        const raw = $("#ev-mite-count").value;
+        const capped = raw === "20+";
+        const n = capped ? ACT.MITE_CAP : parseInt(raw, 10);
+        const rate = ACT.miteRate(n, $("#ev-mite-sample").value);
+        const band = ACT.miteBand(n, capped);
+        const tone = band === "red" ? "text-red-600" : band === "amber" ? "text-amber-600" : "text-green-700";
+        $("#ev-mite-readout").className = "text-sm pb-2 font-semibold " + tone;
+        $("#ev-mite-readout").textContent =
+          (rate == null ? "" : `${capped ? "≥" : ""}${rate.toFixed(1)}% infestation`) +
+          (band === "red" ? " — TREAT" : band === "amber" ? " — watch" : "");
+      };
+      $("#ev-mite-count").addEventListener("change", paint);
+      $("#ev-mite-sample").addEventListener("input", paint);
+      paint();
+      return;
+    }
+
+    let html = "";
+    if (t.subs) {
+      html += sel("ev-sub", "Type", t.subs.map((s) => `<option>${esc(s.label)}</option>`).join(""), "max-width:180px");
+      html += sel("ev-detail", "Which", "", "max-width:200px");
+    } else if (t.items) {
+      html += sel("ev-detail", "Which", t.items.map((i) => `<option>${esc(i)}</option>`).join(""), "max-width:230px");
+    }
+    if (t.special === "percent") {
+      html += `<label class="block"><span class="lbl">Result</span>
+        <input class="inp" id="ev-value" type="number" min="0" max="100" step="1"
+               placeholder="%" style="max-width:110px" /></label>`;
+    }
+    box.innerHTML = html;
+
+    if (t.subs) {
+      const fillDetail = () => {
+        const chosen = t.subs.find((s) => s.label === $("#ev-sub").value) || t.subs[0];
+        $("#ev-detail").innerHTML = chosen.items.map((i) => `<option>${esc(i)}</option>`).join("");
+      };
+      $("#ev-sub").addEventListener("change", fillDetail);
+      fillDetail();
+    }
+  }
+
+  // Turn the form into the shape addTimelineEntry() wants: a timeline row plus,
+  // where one exists, the domain record that feeds the queen's summary card.
+  function buildTimelineEntry(date) {
+    const t = ACT.byKey[$("#ev-type").value];
+    const note = $("#ev-note").value || null;
+    const sub = $("#ev-sub") ? $("#ev-sub").value : null;
+    const detail = $("#ev-detail") ? $("#ev-detail").value : null;
+    const base = { event_date: date, event_type: t.key, event_subtype: sub, event_detail: detail, note };
+
+    if (t.special === "mite") {
+      const raw = $("#ev-mite-count").value;
+      const capped = raw === "20+";
+      const count = capped ? ACT.MITE_CAP : parseInt(raw, 10);
+      const sample = parseInt($("#ev-mite-sample").value, 10) || ACT.MITE_SAMPLE_DEFAULT;
+      return {
+        ...base, value_num: count, event_detail: capped ? "20+" : String(count),
+        table: "inspections",
+        record: {
+          inspection_date: date, mite_check_date: date,
+          mite_count: count, mite_count_capped: capped, mite_sample_size: sample,
+          mite_wash_method: "alcohol wash", summary: `Mite check: ${capped ? "20+" : count} mites / ${sample} bees`,
+          notes: note,
+        },
+      };
+    }
+    if (t.special === "percent") {
+      const v = $("#ev-value").value === "" ? null : parseFloat($("#ev-value").value);
+      return { ...base, value_num: v };
+    }
+    if (t.table === "treatments") {
+      return { ...base, table: "treatments",
+        record: { treatment_date: date, category: sub, product: detail, target: "varroa", notes: note } };
+    }
+    if (t.table === "feedings") {
+      return { ...base, table: "feedings",
+        record: { feed_date: date, category: sub, feed_type: detail, notes: note } };
+    }
+    if (t.table === "inspections") {
+      return { ...base, table: "inspections",
+        record: { inspection_date: date, notes: note, summary: t.label } };
+    }
+    return base;
   }
 
   async function renderEvents(id) {
     const ul = $("#events-list");
     const events = await data.listEvents(id);
     if (!events.length) { ul.innerHTML = `<li class="text-hive-800/40">No timeline entries yet.</li>`; return; }
-    ul.innerHTML = events.map((ev) => `
+    ul.innerHTML = events.map((ev) => {
+      // Old rows stored a free-typed event_type; resolve() maps those onto the
+      // new vocabulary so nothing already logged loses its label.
+      const t = ACT.resolve(ev.event_type);
+      const title = t ? t.label : (ev.event_type || "");
+      const icon = t ? t.icon : "•";
+      const bits = [];
+      if (ev.event_subtype) bits.push(esc(ev.event_subtype));
+      if (ev.event_detail) bits.push(esc(ev.event_detail));
+      let chip = bits.length ? ` <span class="text-hive-800/70">${bits.join(" · ")}</span>` : "";
+      if (t && t.special === "percent" && ev.value_num != null) chip += ` <b>${ev.value_num}%</b>`;
+      if (t && t.special === "mite" && ev.value_num != null) {
+        const capped = ev.event_detail === "20+";
+        const band = ACT.miteBand(Number(ev.value_num), capped);
+        const tone = band === "red" ? "text-red-600" : band === "amber" ? "text-amber-600" : "text-green-700";
+        chip = ` <span class="${tone} font-semibold">${capped ? "20+" : ev.value_num} mite${ev.value_num == 1 && !capped ? "" : "s"}${band === "red" ? " — TREAT" : ""}</span>`;
+      }
+      return `
       <li class="flex gap-2 items-start group">
         <span class="text-honey-600 font-mono text-xs mt-0.5 w-24 shrink-0">${ev.event_date}</span>
-        <span class="flex-1">${ev.event_type ? `<b class="text-honey-800">${esc(ev.event_type)}:</b> ` : ""}${esc(ev.note||"")}</span>
+        <span class="flex-1">${title ? `<b class="text-honey-800">${icon} ${esc(title)}</b>` : ""}${chip}${ev.note ? ` <span class="text-hive-800/60">${esc(ev.note)}</span>` : ""}</span>
         ${APIARIES.canWrite() ? `<button data-ev="${ev.id}" class="text-red-500 opacity-0 group-hover:opacity-100 text-xs">delete</button>` : ""}
-      </li>`).join("");
+      </li>`;
+    }).join("");
     $$("[data-ev]", ul).forEach((b) => b.addEventListener("click", async () => {
-      await data.deleteEvent(b.dataset.ev); await renderEvents(id);
+      await data.deleteEvent(b.dataset.ev);
+      await refreshCardSummaries();
+      await renderEvents(id);
+      renderQueens();
     }));
   }
 

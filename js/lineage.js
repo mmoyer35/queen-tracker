@@ -30,220 +30,290 @@
 
   // =========================================================================
   //  TREE VIEW
+  //  Every position below is COMPUTED, not measured: each queen gets an (x, y)
+  //  in a virtual canvas and is placed with absolute positioning, so the SVG
+  //  connectors can be drawn in the same pass instead of after a reflow.
+  //
+  //  The big idea is the "band": each root queen (one with no tracked mother)
+  //  owns a vertical band of the canvas, and her whole family tree lives inside
+  //  it. Bands sit SIDE BY SIDE, so unrelated lineages never interleave and a
+  //  second family no longer gets shoved to the bottom of the page. Rows are
+  //  still shared across bands, so 2025 lines up with 2025 everywhere.
   // =========================================================================
+  const LINEAGE_COLORS = [
+    "#22c55e", // green
+    "#eab308", // yellow
+    "#3b82f6", // blue
+    "#f97316", // orange
+    "#ec4899", // pink
+    "#a855f7", // purple
+    "#111827", // black
+    "#9ca3af", // gray
+    "#92400e", // brown
+  ];
+
+  // "#22c55e" -> "rgba(34,197,94,.06)" for the band wash behind a lineage.
+  function tint(hex, a) {
+    const n = parseInt(String(hex).slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  }
+
   function renderTree(queens, opts) {
-    const { container, onSelect, label, ratingDots } = opts;
+    const { container, onSelect, fit } = opts;
     container.innerHTML = "";
     if (!queens.length) {
       container.innerHTML = `<p class="text-hive-800/50 text-center py-16">No queens yet — add some to see the family tree.</p>`;
       return;
     }
 
-    // rows: prefer year; fall back to generation depth
+    // ---- Metrics (a little tighter on a phone) -----------------------------
+    const narrow = (container.clientWidth || 900) < 560;
+    const NODE_W = narrow ? 88 : 116;
+    const NODE_H = narrow ? 30 : 34;
+    const COL_GAP = narrow ? 10 : 14;   // between siblings
+    const BAND_GAP = narrow ? 26 : 44;  // between whole lineages
+    const ROW_GAP = narrow ? 42 : 54;   // between year rows
+    const SUB_GAP = narrow ? 40 : 46;   // same-row mother -> daughter drop
+    const GUTTER = narrow ? 40 : 58;    // left column holding the year labels
+    const HEAD_H = 24;                  // strip along the top for band titles
+    const PAD = 12;
+
+    const byId = Object.fromEntries(queens.map((q) => [q.id, q]));
+    const kidsOf = {};
+    queens.forEach((q) => {
+      const m = q.mother_queen_id;
+      if (m && byId[m]) (kidsOf[m] = kidsOf[m] || []).push(q);
+    });
+
+    // ---- Rows: prefer year, fall back to generation depth -------------------
     const depths = computeDepths(queens);
     const haveYears = queens.some((q) => q.year);
-    const rowKey = (q) => (haveYears ? (q.year || "Unknown") : depths[q.id]);
-
-    const rowsMap = {};
-    queens.forEach((q) => {
-      const k = rowKey(q);
-      (rowsMap[k] = rowsMap[k] || []).push(q);
-    });
-    const rowKeys = Object.keys(rowsMap).sort((a, b) => {
+    const rowKeyOf = (q) => String(haveYears ? (q.year || "Unknown") : depths[q.id]);
+    const rowKeys = [...new Set(queens.map(rowKeyOf))].sort((a, b) => {
       const na = parseInt(a, 10), nb = parseInt(b, 10);
-      if (isNaN(na) && isNaN(nb)) return 0;
+      if (isNaN(na) && isNaN(nb)) return a.localeCompare(b);
       if (isNaN(na)) return 1;
       if (isNaN(nb)) return -1;
       return na - nb;
     });
+    const rowIndex = Object.fromEntries(rowKeys.map((k, i) => [k, i]));
+    const rowOf = (q) => rowIndex[rowKeyOf(q)];
 
-    // Horizontal order within each row. Walk the lineage depth-first so every queen's
-    // whole branch stays contiguous, and visit siblings (and roots) with the MOST
-    // descendants first — so a prolific mother's branch sits on the left while childless
-    // or newly-added queens drift to the right.
-    const kidsOf = {};
-    queens.forEach((q) => { const m = q.mother_queen_id; if (m) (kidsOf[m] = kidsOf[m] || []).push(q); });
-    const descCount = {};
-    function countDesc(id) {
-      if (descCount[id] != null) return descCount[id];
-      descCount[id] = 0; // set first so an accidental cycle can't recurse forever
-      let n = 0;
-      for (const c of (kidsOf[id] || [])) n += 1 + countDesc(c.id);
-      return (descCount[id] = n);
-    }
-    queens.forEach((q) => countDesc(q.id));
-    const baseIdx = {};
-    queens.forEach((q, i) => (baseIdx[q.id] = i)); // stable tie-break (original list order)
-    const sortSibs = (a, b) => (descCount[b.id] - descCount[a.id]) || (baseIdx[a.id] - baseIdx[b.id]);
-    const orderIndex = {};
-    let counter = 0;
-    const visit = (q, guard) => {
-      if (orderIndex[q.id] != null || guard.has(q.id)) return;
-      guard.add(q.id);
-      orderIndex[q.id] = counter++;
-      (kidsOf[q.id] || []).slice().sort(sortSibs).forEach((c) => visit(c, guard));
-    };
-    queens.filter((q) => isRoot(queens, q)).sort(sortSibs).forEach((r) => visit(r, new Set()));
-    queens.forEach((q) => { if (orderIndex[q.id] == null) orderIndex[q.id] = counter++; });
-    rowKeys.forEach((k) => rowsMap[k].sort((a, b) => orderIndex[a.id] - orderIndex[b.id]));
-
-    // Within a row, nudge each queen slightly lower than her mother when both share
-    // the same row (e.g. a mother and her daughters in the same calendar year), so the
-    // parent→daughter link reads as a short downward drop instead of a flat side-by-side
-    // line. Cascades for same-year granddaughters. Mothers whose daughters fall in a later
-    // year are unaffected (offset 0).
-    const SAME_ROW_OFFSET = 62; // px of vertical stagger per same-row generation
+    // A mother and daughter can share a row (same calendar year). Drop the
+    // daughter onto her own sub-line so the link reads as a short downward hop
+    // rather than a flat sideways line. Cascades for same-year granddaughters.
     const subLevel = {};
-    rowKeys.forEach((k) => {
-      const rowIds = new Set(rowsMap[k].map((q) => q.id));
-      const byIdRow = Object.fromEntries(rowsMap[k].map((q) => [q.id, q]));
-      const level = (q, guard) => {
+    (function () {
+      const lvl = (q, guard) => {
         if (subLevel[q.id] != null) return subLevel[q.id];
-        const momId = q.mother_queen_id;
-        if (!momId || !rowIds.has(momId) || guard.has(q.id)) return (subLevel[q.id] = 0);
+        const mom = byId[q.mother_queen_id];
+        if (!mom || rowOf(mom) !== rowOf(q) || guard.has(q.id)) return (subLevel[q.id] = 0);
         guard.add(q.id);
-        return (subLevel[q.id] = level(byIdRow[momId], guard) + 1);
+        return (subLevel[q.id] = lvl(mom, guard) + 1);
       };
-      rowsMap[k].forEach((q) => level(q, new Set()));
+      queens.forEach((q) => lvl(q, new Set()));
+    })();
+
+    // Row tops, sized to however many sub-lines that row actually needs.
+    const rowSubMax = rowKeys.map(() => 0);
+    queens.forEach((q) => {
+      const r = rowOf(q);
+      rowSubMax[r] = Math.max(rowSubMax[r], subLevel[q.id] || 0);
     });
+    const rowTop = [];
+    let yCursor = 0;
+    rowKeys.forEach((k, i) => {
+      rowTop[i] = yCursor;
+      yCursor += rowSubMax[i] * SUB_GAP + NODE_H + ROW_GAP;
+    });
+    const canvasH = Math.max(0, yCursor - ROW_GAP);
+    const yOf = (q) => rowTop[rowOf(q)] + (subLevel[q.id] || 0) * SUB_GAP;
+    // Every node sits on exactly one horizontal "line" (row + sub-line). Two
+    // queens may only share an x-range if they are on different lines.
+    const lineOf = (q) => rowOf(q) + ":" + (subLevel[q.id] || 0);
 
-    // build DOM
-    const wrap = document.createElement("div");
-    wrap.style.position = "relative";
-    wrap.style.width = "100%";
+    // ---- Sibling order ------------------------------------------------------
+    // Oldest daughter first, then by code the way a person reads it (B-2 before
+    // B-10). The layout keeps every branch contiguous on its own, so there's no
+    // need to hoist prolific branches to the left any more — plain chronological
+    // order is easier to follow.
+    const baseIdx = {};
+    queens.forEach((q, i) => (baseIdx[q.id] = i)); // stable tie-break
+    const codeCmp = (a, b) =>
+      String(a.queen_code || "").localeCompare(String(b.queen_code || ""), undefined, { numeric: true });
+    const sortSibs = (a, b) => (a.year || 9999) - (b.year || 9999) || codeCmp(a, b) || baseIdx[a.id] - baseIdx[b.id];
 
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.style.position = "absolute";
-    svg.style.left = "0"; svg.style.top = "0";
-    svg.style.width = "100%"; svg.style.height = "100%";
-    svg.style.pointerEvents = "none";
-    svg.style.overflow = "visible";
-    wrap.appendChild(svg);
-
-    // ---- Lineage colors ----------------------------------------------------
-    // Each root queen (no tracked mother) gets a color; every descendant inherits it,
-    // so a whole family tree is one color. Roots are colored oldest-first and the palette
-    // cycles, so the 10th distinct lineage reuses the 1st color (green).
-    const LINEAGE_COLORS = [
-      "#22c55e", // green
-      "#eab308", // yellow
-      "#3b82f6", // blue
-      "#f97316", // orange
-      "#ec4899", // pink
-      "#a855f7", // purple
-      "#111827", // black
-      "#9ca3af", // gray
-      "#92400e", // brown
-    ];
-    const byIdAll = Object.fromEntries(queens.map((q) => [q.id, q]));
+    // ---- Which lineage does each queen belong to? ---------------------------
     const rootId = {};
     const findRoot = (q, guard) => {
       if (rootId[q.id]) return rootId[q.id];
       if (isRoot(queens, q) || guard.has(q.id)) return (rootId[q.id] = q.id);
       guard.add(q.id);
-      const mom = byIdAll[q.mother_queen_id];
+      const mom = byId[q.mother_queen_id];
       return (rootId[q.id] = mom ? findRoot(mom, guard) : q.id);
     };
     queens.forEach((q) => findRoot(q, new Set()));
+
+    // Oldest lineage first — same order for the palette and for the bands, so
+    // the leftmost family is always the green one.
+    const bandRoots = queens
+      .filter((q) => rootId[q.id] === q.id)
+      .sort((a, b) =>
+        (a.year || 9999) - (b.year || 9999) ||
+        String(a.created_at || "").localeCompare(String(b.created_at || "")) ||
+        baseIdx[a.id] - baseIdx[b.id]);
     const rootColor = {};
-    queens
-      .filter((q) => rootId[q.id] === q.id) // the root queens themselves
-      .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
-      .forEach((r, i) => (rootColor[r.id] = LINEAGE_COLORS[i % LINEAGE_COLORS.length]));
+    bandRoots.forEach((r, i) => (rootColor[r.id] = LINEAGE_COLORS[i % LINEAGE_COLORS.length]));
     const colorOf = (q) => rootColor[rootId[q.id]] || "#e5d3a8";
 
-    rowKeys.forEach((k) => {
-      const rowEl = document.createElement("div");
-      rowEl.className = "lin-row";
-      rowEl.style.display = "flex";
-      rowEl.style.flexWrap = "wrap";
-      rowEl.style.gap = "10px";
-      rowEl.style.alignItems = "flex-start";
-      rowEl.style.margin = "0 0 40px 0";
-      rowEl.style.position = "relative";
+    // ---- Lay out one lineage at a time, left to right ------------------------
+    // Within a band: children first (depth-first), then the mother is centred
+    // over them. `lineNext` remembers the first free x on each horizontal line,
+    // so a centred mother can never land on top of a queen already placed on
+    // that line — if she would, she and her whole subtree slide right together.
+    const X = {};
+    const placed = new Set();
+    const bands = [];
+    let bandX = 0;
 
-      const lbl = document.createElement("div");
-      lbl.textContent = k;
-      lbl.style.cssText = "position:sticky;left:0;min-width:56px;font-weight:700;color:#a85e12;font-size:.8rem;padding-top:20px;";
-      rowEl.appendChild(lbl);
-
-      rowsMap[k].forEach((q) => {
-        const node = document.createElement("div");
-        node.className = "tree-node bg-white rounded-lg border card-shadow cursor-pointer";
-        node.style.cssText = `min-width:52px;max-width:120px;padding:5px 8px;border-color:${colorOf(q)};border-width:2px;`;
-        node.style.marginTop = (subLevel[q.id] || 0) * SAME_ROW_OFFSET + "px";
-        node.dataset.id = q.id;
-        node.innerHTML = `<div style="font-weight:700;color:#894b16;font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(q.queen_code)}</div>`;
-        node.addEventListener("click", () => onSelect(q.id));
-        rowEl.appendChild(node);
-      });
-      wrap.appendChild(rowEl);
-    });
-
-    container.appendChild(wrap);
-
-    // draw connectors after layout
-    requestAnimationFrame(() => {
-      const wrapBox = wrap.getBoundingClientRect();
-      svg.setAttribute("width", wrap.scrollWidth);
-      svg.setAttribute("height", wrap.scrollHeight);
-      // Measure every node's laid-out geometry ONCE, before any transform is applied.
-      const geom = {};
-      queens.forEach((q) => {
-        const el = wrap.querySelector(`.tree-node[data-id="${q.id}"]`);
-        if (!el) return;
-        const b = el.getBoundingClientRect();
-        geom[q.id] = { cx: b.left - wrapBox.left + b.width / 2, top: b.top - wrapBox.top, bottom: b.bottom - wrapBox.top };
-      });
-
-      // Center each parent horizontally over its children's span (deepest-first, so a parent
-      // centers over children that were themselves already centered — 0-1 over M-2 over its
-      // daughters). Nodes are nudged via transform; connectors are then drawn from these
-      // COMPUTED centers (not re-measured rects), so the lines always follow the shifted nodes.
-      const desiredX = {};
-      queens.slice()
-        .sort((a, b) => (depths[b.id] || 0) - (depths[a.id] || 0))
-        .forEach((q) => {
-          if (!geom[q.id]) return;
-          const kids = (kidsOf[q.id] || []).filter((c) => geom[c.id]);
-          if (!kids.length) { desiredX[q.id] = geom[q.id].cx; return; }
-          const xs = kids.map((c) => desiredX[c.id]).filter((v) => v != null).sort((a, b) => a - b);
-          desiredX[q.id] = xs.length ? (xs[0] + xs[xs.length - 1]) / 2 : geom[q.id].cx;
-        });
-      queens.forEach((q) => {
-        const el = wrap.querySelector(`.tree-node[data-id="${q.id}"]`);
-        if (!el || !geom[q.id] || desiredX[q.id] == null) return;
-        const shift = desiredX[q.id] - geom[q.id].cx;
-        if (Math.abs(shift) > 0.5) el.style.transform = `translateX(${shift}px)`;
-      });
-
-      // Connector endpoint from computed geometry: final center x + pre-transform y (y is
-      // unchanged by the horizontal nudge).
-      const finalPos = (id, edge) => {
-        const g = geom[id];
-        if (!g) return null;
-        return { x: desiredX[id] != null ? desiredX[id] : g.cx, y: edge === "top" ? g.top : g.bottom };
+    function layoutBand(root) {
+      const lineNext = {};
+      const members = [];
+      const bump = (q) => {
+        const k = lineOf(q);
+        lineNext[k] = Math.max(lineNext[k] || 0, X[q.id] + NODE_W + COL_GAP);
       };
+      const slide = (q, dx) => {
+        X[q.id] += dx;
+        bump(q);
+        (kidsOf[q.id] || []).forEach((c) => { if (placed.has(c.id)) slide(c, dx); });
+      };
+      const walk = (q) => {
+        if (placed.has(q.id)) return;
+        placed.add(q.id);
+        members.push(q);
+        const kids = (kidsOf[q.id] || []).slice().sort(sortSibs);
+        kids.forEach(walk);
+        const done = kids.filter((c) => X[c.id] != null);
+        const floor = lineNext[lineOf(q)] || 0;
+        if (done.length) {
+          const xs = done.map((c) => X[c.id]);
+          let x = (Math.min(...xs) + Math.max(...xs)) / 2;
+          if (x < floor) { const dx = floor - x; done.forEach((c) => slide(c, dx)); x = floor; }
+          X[q.id] = x;
+        } else {
+          X[q.id] = floor;
+        }
+        bump(q);
+      };
+      walk(root);
 
-      queens.forEach((q) => {
-        if (!q.mother_queen_id) return;
-        const from = finalPos(q.mother_queen_id, "bottom");
-        const to = finalPos(q.id, "top");
-        if (!from || !to) return;
-        const midY = (from.y + to.y) / 2;
-        const lineColor = colorOf(q); // child inherits its lineage color
-        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`);
-        path.setAttribute("class", "tree-connector");
-        path.style.stroke = lineColor; // inline beats the CSS class stroke
-        svg.appendChild(path);
-        // small arrowhead
-        const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        dot.setAttribute("cx", to.x); dot.setAttribute("cy", to.y); dot.setAttribute("r", "3");
-        dot.setAttribute("fill", lineColor);
-        svg.appendChild(dot);
-      });
+      // Slide the finished band into place beside the previous one.
+      const minX = Math.min(...members.map((q) => X[q.id]));
+      const maxX = Math.max(...members.map((q) => X[q.id]));
+      const width = maxX - minX + NODE_W;
+      members.forEach((q) => (X[q.id] += bandX - minX));
+      bands.push({ root, x: bandX, w: width, n: members.length });
+      bandX += width + BAND_GAP;
+    }
+
+    bandRoots.forEach(layoutBand);
+    // Anything left over (only possible if the data contains a mother-cycle)
+    // still deserves a spot rather than vanishing.
+    queens.forEach((q) => { if (!placed.has(q.id)) layoutBand(q); });
+
+    const canvasW = Math.max(0, bandX - BAND_GAP);
+
+    // ---- Build the canvas ---------------------------------------------------
+    const wrap = document.createElement("div");
+    wrap.className = "lin-canvas";
+    wrap.style.cssText = `position:relative;width:${GUTTER + canvasW + PAD}px;height:${HEAD_H + canvasH + PAD}px;`;
+
+    // Year labels ride in a sticky layer so they stay put when the canvas is
+    // scrolled sideways. Zero-sized, so it costs no layout space.
+    const labels = document.createElement("div");
+    labels.className = "lin-labels";
+    labels.style.cssText = "position:sticky;left:0;top:0;width:0;height:0;z-index:6;";
+    rowKeys.forEach((k, i) => {
+      const l = document.createElement("div");
+      l.style.cssText = `position:absolute;left:0;top:${HEAD_H + rowTop[i] + (NODE_H - 16) / 2}px;width:${GUTTER - 8}px;font-weight:700;color:#a85e12;font-size:.78rem;line-height:16px;background:#fff;`;
+      l.textContent = k;
+      labels.appendChild(l);
     });
+    wrap.appendChild(labels);
+
+    // Band washes + titles, behind everything else.
+    bands.forEach((b) => {
+      const color = rootColor[b.root.id] || "#e5d3a8";
+      const wash = document.createElement("div");
+      wash.className = "lin-band";
+      wash.style.cssText = `position:absolute;top:0;left:${GUTTER + b.x - BAND_GAP / 2}px;width:${b.w + BAND_GAP}px;height:100%;background:${tint(color, 0.06)};border-radius:14px;z-index:0;`;
+      wrap.appendChild(wash);
+
+      const title = document.createElement("div");
+      title.className = "lin-band-title";
+      title.style.cssText = `position:absolute;top:0;left:${GUTTER + b.x}px;width:${b.w}px;height:${HEAD_H}px;line-height:${HEAD_H}px;text-align:center;font-size:.7rem;font-weight:700;color:${color};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:1;`;
+      title.textContent = b.n > 1 ? `${b.root.queen_code} · ${b.n} queens` : b.root.queen_code;
+      title.title = `Lineage of ${b.root.queen_code}`;
+      wrap.appendChild(title);
+    });
+
+    // Connectors.
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", GUTTER + canvasW + PAD);
+    svg.setAttribute("height", HEAD_H + canvasH + PAD);
+    svg.style.cssText = "position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:2;";
+    wrap.appendChild(svg);
+
+    const cxOf = (q) => GUTTER + X[q.id] + NODE_W / 2;
+    queens.forEach((q) => {
+      const mom = byId[q.mother_queen_id];
+      if (!mom || X[q.id] == null || X[mom.id] == null) return;
+      const from = { x: cxOf(mom), y: HEAD_H + yOf(mom) + NODE_H };
+      const to = { x: cxOf(q), y: HEAD_H + yOf(q) };
+      const midY = (from.y + to.y) / 2;
+      const color = colorOf(q); // a daughter inherits her lineage's color
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`);
+      path.setAttribute("class", "tree-connector");
+      path.style.stroke = color; // inline beats the CSS class stroke
+      svg.appendChild(path);
+      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      dot.setAttribute("cx", to.x); dot.setAttribute("cy", to.y); dot.setAttribute("r", "3");
+      dot.setAttribute("fill", color);
+      svg.appendChild(dot);
+    });
+
+    // Nodes.
+    queens.forEach((q) => {
+      if (X[q.id] == null) return;
+      const node = document.createElement("div");
+      node.className = "tree-node bg-white rounded-lg border card-shadow cursor-pointer";
+      node.style.cssText = `position:absolute;left:${GUTTER + X[q.id]}px;top:${HEAD_H + yOf(q)}px;width:${NODE_W}px;height:${NODE_H}px;box-sizing:border-box;padding:0 6px;display:flex;align-items:center;justify-content:center;border-color:${colorOf(q)};border-width:2px;z-index:3;`;
+      node.dataset.id = q.id;
+      node.title = [q.queen_code, q.name, q.year, q.current_hive ? "Hive " + q.current_hive : ""].filter(Boolean).join(" · ");
+      node.innerHTML = `<div style="font-weight:700;color:#894b16;font-size:${narrow ? ".72rem" : ".8rem"};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(q.queen_code)}</div>`;
+      node.addEventListener("click", () => onSelect(q.id));
+      wrap.appendChild(node);
+    });
+
+    // ---- Fit-to-width -------------------------------------------------------
+    // Side-by-side lineages get wide fast. Normally the canvas just scrolls;
+    // with "Fit" on it is scaled down so the whole yard is visible at once.
+    const totalW = GUTTER + canvasW + PAD;
+    const totalH = HEAD_H + canvasH + PAD;
+    const avail = (container.clientWidth || totalW) - 8;
+    if (fit && totalW > avail) {
+      const s = Math.max(0.35, avail / totalW);
+      wrap.style.transformOrigin = "top left";
+      wrap.style.transform = `scale(${s})`;
+      const shell = document.createElement("div");
+      shell.style.cssText = `width:${Math.round(totalW * s)}px;height:${Math.round(totalH * s)}px;`;
+      shell.appendChild(wrap);
+      container.appendChild(shell);
+      return;
+    }
+    container.appendChild(wrap);
   }
 
   // =========================================================================
